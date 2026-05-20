@@ -10,9 +10,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # 깃허브 최신 보안/버전 강제 적용 변수 선언
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
     # 최신 v4 버전으로 업그레이드
