@@ -29,7 +29,7 @@ def get_subscription_data():
     today_info = []
     
     try:
-        print("1. 청약홈 캘린더 직접 접속...")
+        print("1. 청약홈 달력 주소 접속...")
         driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
         time.sleep(6)
         
@@ -42,6 +42,7 @@ def get_subscription_data():
         driver.switch_to.frame("iframe_calendar")
         time.sleep(2)
         
+        # 오늘 날짜 단추 탐색 및 조준
         today_day = str(datetime.now().day)
         print(f"2. 달력 내부에서 오늘 날짜({today_day}일) 단추 강제 클릭...")
         
@@ -50,57 +51,52 @@ def get_subscription_data():
             EC.element_to_be_clickable((By.XPATH, target_xpath))
         )
         
-        # 날짜 클릭
+        # 날짜 단추 클릭
         driver.execute_script("arguments[0].click();", target_element)
-        print("-> 클릭 명령 전송 완료. 비동기 데이터 수신 대기 (7초)...")
-        time.sleep(7)
+        print("-> [성공] 오늘 날짜 단추 클릭 명령 전송 완료.")
         
-        # 🔥 [핵심 개조: 메모리 직격 인질극]
-        # 화면의 HTML을 긁는 대신, 청약홈 시스템이 내부 메모리에 저장해 둔 진짜 아파트 데이터 리스트 변수들을 자바스크립트로 강제 탈탈 텁니다.
-        print("3. 청약홈 시스템 내부 메모리 데이터 직접 추출 중...")
-        script_get_data = """
-            var results = [];
-            if (typeof calDetailList !== 'undefined' && calDetailList !== null) {
-                for (var i = 0; i < calDetailList.length; i++) {
-                    var item = calDetailList[i];
-                    if (item.houseNm) {
-                        var badge = item.houseSecdNm || "청약";
-                        results.append("[" + badge + "] " + item.houseNm);
-                    }
-                }
-            }
-            return results;
-        """
-        # 자바스크립트로부터 직접 가공된 텍스트 배열을 넘겨받음
-        raw_items = driver.execute_script(script_get_data)
+        # [중요] 리스트 영역은 sub_iframe에 속하므로 클릭 직후 즉시 한 단계 바깥 창으로 복귀
+        driver.switch_to.parent_frame()
         
-        if raw_items and len(raw_items) > 0:
-            print(f"-> [추출 성공] 내부 데이터소스로부터 {len(raw_items)}건의 단지 정보 강제 획득!")
-            today_info = raw_items
-        else:
-            # 포착 실패 시 안전장치로 원래 쓰던 프레임 원복 수집법 작동
-            print("⚠️ 메모리 변수 수집 차단됨. 부모 프레임 화면 수집으로 복백(Fallback) 진행...")
-            driver.switch_to.parent_frame()
-            time.sleep(2)
-            soup = BeautifulSoup(driver.page_source, "html.parser")
-            list_area = soup.select_one("#sub_list_area")
-            if list_area:
-                area_text = list_area.text.strip()
-                if "없습니다" not in area_text and area_text:
-                    items = list_area.select("ul li")
-                    for item in items:
-                        badge_el = item.select_one(".badge")
-                        tit_el = item.select_one(".tit")
-                        if badge_el and tit_el:
-                            today_info.append(f"[{badge_el.text.strip()}] {tit_el.text.strip()}")
-                            
+        # 🔥 [진짜 최종 해결책: 물리 엘리먼트 렌더링 동기화]
+        # 하단 리스트 영역(#sub_list_area) 내부에 실제 아파트 이름 태그('.tit')가 
+        # 화면에 완전히 나타나서 채워질 때까지 브라우저를 최대 15초간 강제로 붙잡아 둡니다.
+        print("3. 비동기 데이터 수집 및 하단 아파트 명단 렌더링 대기 감시 (최대 15초)...")
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, "#sub_list_area .tit"))
+            )
+            print("-> [감시 성공] 하단 영역에 실제 아파트 공급 정보 렌더링 포착 완료!")
+        except Exception as wait_err:
+            print(f"⚠️ 정밀 감시 타임아웃 또는 오늘 진짜 일정이 없음: {wait_err}")
+            print("-> 안전 수집을 위해 5초 추가 대기 후 진행합니다.")
+            time.sleep(5)
+            
+        print("4. 화면 렌더링 완료. 아파트 명단 최종 추출 시작...")
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        list_area = soup.select_one("#sub_list_area")
+        
+        if list_area:
+            area_text = list_area.text.strip()
+            print(f"[서버 응답 데이터 로그]: {area_text[:60]}")
+            
+            if "없습니다" in area_text or not area_text:
+                today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
+            else:
+                items = list_area.select("ul li")
+                for item in items:
+                    badge_el = item.select_one(".badge")
+                    tit_el = item.select_one(".tit")
+                    if badge_el and tit_el:
+                        today_info.append(f"[{badge_el.text.strip()}] {tit_el.text.strip()}")
+                        
         if not today_info:
             today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
             
         return today_info
         
     except Exception as e:
-        print(f"❌ 크롤링 제어 중 치명적 예외 발생: {e}")
+        print(f"❌ 크롤링 매크로 제어 중 오류 발생: {e}")
         return None
     finally:
         driver.quit()
