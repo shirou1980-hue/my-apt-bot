@@ -25,73 +25,66 @@ def get_subscription_data():
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     options.add_argument("--disable-blink-features=AutomationControlled")
     
+    # 🔥 [진짜 핵심 치트키] 가상 브라우저의 창 크기를 일반 대형 PC 모니터 화면 크기로 박아버립니다.
+    # 이렇게 해야 청약홈 달력이 모바일 모드로 쪼그라들지 않고, 아파트 이름들이 화면에 다 그려집니다.
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--start-maximized")
+    
     driver = webdriver.Chrome(options=options)
     today_info = []
     
     try:
-        print("1. 청약홈 달력 주소 접속...")
+        print("1. 청약홈 달력 주소 대형 모니터 모드로 접속...")
         driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
-        time.sleep(8) # 달력 내부 텍스트가 완전히 렌더링될 때까지 넉넉히 대기
+        time.sleep(8)
         
         # [1차 진입] sub_iframe
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sub_iframe")))
         driver.switch_to.frame("sub_iframe")
         
-        # [2차 진입] iframe_calendar (진짜 달력 알맹이)
+        # [2차 진입] iframe_calendar
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "iframe_calendar")))
         driver.switch_to.frame("iframe_calendar")
         time.sleep(3)
         
-        # 오늘 날짜 구하기
         today_day = str(datetime.now().day)
-        print(f"2. 달력 전수 조사 시작: 오늘 날짜({today_day}일) 칸 직격 타격...")
+        print(f"2. 전체 화면 렌더링 검증 완료. 오늘 날짜({today_day}일) 칸 정밀 크롭 시작...")
         
-        # 달력 내부의 모든 날짜 칸(td)을 가져옵니다.
         soup = BeautifulSoup(driver.page_source, "html.parser")
         cells = soup.select(".calendar_body td")
         
         matched_cell = None
         for cell in cells:
-            # 칸 안에서 날짜 숫자(a 태그)를 찾습니다.
             a_tag = cell.select_one("a")
             if a_tag:
                 cell_day = a_tag.text.strip()
-                # 만약 그 칸의 숫자가 오늘 날짜와 정확히 일치한다면
                 if cell_day == today_day:
                     matched_cell = cell
                     break
         
         if matched_cell:
-            print("-> [성공] 오늘 날짜 칸을 달력 안에서 확보했습니다. 데이터 추출 시작...")
-            divs = matched_cell.select("div")
-            
-            for d in divs:
-                if d.select_one("a") and d.text.strip() == today_day:
-                    continue
-                
-                # 아파트 이름 및 배지 텍스트 정제
-                item_text = " ".join(d.text.split())
-                
-                # 🔥 오타 수정 완료: Gold -> and
-                if item_text and item_text != today_day and len(item_text) > 2:
-                    today_info.append(item_text)
-        else:
-            print("⚠️ 달력 내부에서 오늘 날짜 칸을 식별하지 못했습니다.")
-
-        # 최후의 백업 보완 (텍스트 기반 수집)
-        if not today_info and matched_cell:
+            print("-> [성공] 대형 달력 내부에서 오늘 날짜 구역을 확보했습니다.")
+            # 텍스트 라인 단위로 쪼개서 불필요한 공백을 지우고 알맹이만 선별합니다.
             lines = [line.strip() for line in matched_cell.text.split("\n") if line.strip()]
+            
             for line in lines:
-                if line != today_day and len(line) > 2:
-                    today_info.append(line)
-                        
+                # 오늘 날짜 숫자 자체이거나, 한 글자짜리 노이즈는 제외합니다.
+                if line != today_day and len(line) > 1:
+                    # 완벽하게 정제된 아파트 정보 수집
+                    clean_text = " ".join(line.split())
+                    today_info.append(clean_text)
+                    
+            print(f"-> 오늘 자 일정 총 {len(today_info)}건 획득 성공.")
+        else:
+            print("⚠️ 반응형 해상도 우회 실패: 달력 내부에서 오늘 날짜 칸을 식별하지 못했습니다.")
+
         if not today_info:
             today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
             
         return today_info
         
     except Exception as e:
-        print(f"❌ 크롤링 매크로 제어 중 오류 발생: {e}")
+        print(f"❌ 크롤링 제어 중 오류 발생: {e}")
         return None
     finally:
         driver.quit()
