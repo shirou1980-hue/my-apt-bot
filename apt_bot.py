@@ -29,45 +29,55 @@ def get_subscription_data():
     today_info = []
     
     try:
-        print("1. 청약홈 캘린더 직접 진입...")
+        print("1. 청약홈 달력 주소 접속...")
         driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
-        time.sleep(7)
+        time.sleep(5)
         
-        # [1차] sub_iframe 진입
+        # [1차 진입] sub_iframe
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sub_iframe")))
         driver.switch_to.frame("sub_iframe")
         
-        # [2차] 안쪽 달력창 진입
+        # [2차 진입] iframe_calendar
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "iframe_calendar")))
         driver.switch_to.frame("iframe_calendar")
-        time.sleep(3)
+        time.sleep(2)
         
-        # 오늘 날짜 추출 및 클릭
+        # 오늘 날짜 단추 탐색 및 조준
         today_day = str(datetime.now().day)
-        print(f"2. 달력 내부에서 오늘 날짜({today_day}일) 단추 클릭 조작...")
+        print(f"2. 달력 내부에서 오늘 날짜({today_day}일) 엘리먼트 추적 및 강제 클릭...")
         
         target_xpath = f"//div[@class='calendar_body']//td//a[text()='{today_day}' or normalize-space(text())='{today_day}']"
         target_element = WebDriverWait(driver, 15).until(
             EC.element_to_be_clickable((By.XPATH, target_xpath))
         )
         
+        # 날짜 단추 클릭 명령 전달
         driver.execute_script("arguments[0].click();", target_element)
-        print("-> [성공] 오늘 날짜 단추를 정상 클릭했습니다.")
-        print("-> 청약 데이터 통신 및 화면 로딩 대기 (7초)...")
-        time.sleep(7)
+        print("-> [성공] 오늘 날짜 단추 클릭 완료.")
         
-        # [프레임 탈출] 하단 리스트 구역을 읽기 위해 부모 프레임(sub_iframe)으로 이동
-        print("3. 리스트 데이터 수집을 위해 부모 프레임으로 복귀...")
+        # [부모 프레임 원복] 리스트 영역을 감시하기 위해 즉시 sub_iframe으로 복귀
         driver.switch_to.parent_frame()
-        time.sleep(2)
         
-        print("4. 업데이트가 완료된 최종 화면 소스 파싱 시작...")
+        # 🔥 [핵심 수정: 정밀 동기화 대기]
+        # 단순히 time.sleep으로 쉬는 것이 아니라, 하단 리스트 영역(#sub_list_area) 내부에 
+        # 아파트 정보 데이터가 담긴 태그(ul 또는 li)가 렌더링되어 올라올 때까지 최대 15초간 정밀 감시하며 대기합니다.
+        print("3. 하단 상세 청약 리스트 렌더링 실시간 감시 대기 중...")
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "#sub_list_area ul, #sub_list_area li"))
+            )
+            print("-> [감시 성공] 하단 영역에 새로운 청약 데이터 데이터 포착 완료!")
+        except:
+            print("⚠️ 자동 감시 타임아웃: 안전 수집을 위해 시간 대기(5초)로 전환합니다.")
+            time.sleep(5)
+            
+        print("4. 업데이트가 완료된 화면에서 아파트 명단 최종 추출 시작...")
         soup = BeautifulSoup(driver.page_source, "html.parser")
         list_area = soup.select_one("#sub_list_area")
         
         if list_area:
             area_text = list_area.text.strip()
-            print(f"[서버 데이터 추출 원본]: {area_text[:60]}")
+            print(f"[실시간 데이터 확인]: {area_text[:60]}")
             
             if "없습니다" in area_text or not area_text:
                 today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
@@ -85,7 +95,7 @@ def get_subscription_data():
         return today_info
         
     except Exception as e:
-        print(f"❌ 크롤링 에러 발생: {e}")
+        print(f"❌ 크롤링 제어 중 오류 발생: {e}")
         return None
     finally:
         driver.quit()
