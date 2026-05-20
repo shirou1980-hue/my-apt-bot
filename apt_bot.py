@@ -31,52 +31,61 @@ def get_subscription_data():
     try:
         print("1. 청약홈 달력 주소 접속...")
         driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
-        time.sleep(6)
+        time.sleep(8) # 달력 내부 텍스트가 완전히 렌더링될 때까지 넉넉히 대기
         
         # [1차 진입] sub_iframe
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sub_iframe")))
         driver.switch_to.frame("sub_iframe")
         
-        # [2차 진입] iframe_calendar
+        # [2차 진입] iframe_calendar (진짜 달력 알맹이)
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "iframe_calendar")))
         driver.switch_to.frame("iframe_calendar")
-        time.sleep(2)
+        time.sleep(3)
         
-        # 오늘 날짜 단추 탐색 및 클릭
+        # 오늘 날짜 구하기
         today_day = str(datetime.now().day)
-        print(f"2. 달력 내부에서 오늘 날짜({today_day}일) 단추 강제 클릭...")
+        print(f"2. 달력 전수 조사 시작: 오늘 날짜({today_day}일) 칸 직격 타격...")
         
-        target_xpath = f"//div[@class='calendar_body']//td//a[text()='{today_day}' or normalize-space(text())='{today_day}']"
-        target_element = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.XPATH, target_xpath))
-        )
-        
-        driver.execute_script("arguments[0].click();", target_element)
-        print("-> [성공] 오늘 날짜 단추 클릭 명령 전송 완료.")
-        
-        # 리스트 구역 접근을 위해 부모 프레임 원복
-        driver.switch_to.parent_frame()
-        
-        print("3. 비동기 하단 아파트 명단 로딩 대기 (5초)...")
-        time.sleep(5)
-            
-        print("4. 아파트 명단 전체 추출 시작...")
+        # 달력 내부의 모든 날짜 칸(td)을 가져옵니다.
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        list_area = soup.select_one("#sub_list_area")
+        cells = soup.select(".calendar_body td")
         
-        if list_area:
-            area_text = list_area.text.strip()
+        matched_cell = None
+        for cell in cells:
+            # 칸 안에서 날짜 숫자(a 태그)를 찾습니다.
+            a_tag = cell.select_one("a")
+            if a_tag:
+                cell_day = a_tag.text.strip()
+                # 만약 그 칸의 숫자가 오늘 날짜(예: 20)와 정확히 일치한다면
+                if cell_day == today_day:
+                    matched_cell = cell
+                    break
+        
+        if matched_cell:
+            print("-> [성공] 오늘 날짜 칸을 달력 안에서 확보했습니다. 데이터 추출 시작...")
+            # 오늘 날짜 칸 내부에 들어있는 모든 청약 항목 목록(div 또는 p 또는 span 등)을 긁어옵니다.
+            # 청약홈 달력 구조상 각 아파트 항목은 보통 div 구역이나 특정 클래스로 묶여 있습니다.
+            divs = matched_cell.select("div")
             
-            if "없습니다" in area_text or not area_text:
-                today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
-            else:
-                # 🔥 [핵심 수정] 특정 배지만 거르지 않고, 오늘 날짜 목록에 뜨는 모든 li 항목을 통째로 가져옵니다.
-                items = list_area.select("ul li")
-                for item in items:
-                    # 항목 안의 전체 텍스트를 깔끔하게 정리하여 가져옴
-                    item_text = " ".join(item.text.split())
-                    if item_text:
-                        today_info.append(item_text)
+            for d in divs:
+                # 날짜 숫자 자체를 담고 있는 첫 번째 엘리먼트는 제외합니다.
+                if d.select_one("a") and d.text.strip() == today_day:
+                    continue
+                
+                # 아파트 이름 및 배지 텍스트 정제
+                item_text = " ".join(d.text.split())
+                # 공백이나 숫자 단독인 경우는 제외하고 진짜 텍스트만 선별
+                if item_text Gold and item_text != today_day and len(item_text) > 2:
+                    today_info.append(item_text)
+        else:
+            print("⚠️ 달력 내부에서 오늘 날짜 칸을 식별하지 못했습니다.")
+
+        # 만약 위의 정밀 td 직격법으로도 안 담겼을 경우를 대비한 최후의 백업 보완 (텍스트 기반 수집)
+        if not today_info and matched_cell:
+            lines = [line.strip() for line in matched_cell.text.split("\n") if line.strip()]
+            for line in lines:
+                if line != today_day and len(line) > 2:
+                    today_info.append(line)
                         
         if not today_info:
             today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
@@ -110,7 +119,7 @@ def send_email(contents):
     <html>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;">
       <h2 style="color:#0056b3;border-bottom:2px solid #0056b3;padding-bottom:10px;margin-bottom:20px;">🏠 청약Home 오늘의 아파트 공급 정보</h2>
-      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 진행 중인 아파트 일정 목록입니다.</p>
+      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 달력에 등록된 청약 일정 목록입니다.</p>
       <div style="background-color:#f8f9fa;padding:20px;border-radius:5px;border:1px solid #e9ecef;margin:20px 0;">
         """ + body_html + """
       </div>
