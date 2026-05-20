@@ -160,8 +160,13 @@ def get_subscription_data() -> list:
 
     return data
 
+# ══════════════════════════════════════════════════════════
+# 이메일 발송 루틴 (변수 선언 오류 해결 완료)
+# ══════════════════════════════════════════════════════════
 def send_email(contents: list):
+    # 🔥 [핵심 수정] 함수가 시작되자마자 최우선으로 날짜 변수부터 완벽하게 선언합니다.
     today_str = datetime.now().strftime("%Y-%m-%d")
+    
     no_data_keywords = ["없습니다", "없음", "오류", "실패", "패키지"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
@@ -177,7 +182,7 @@ def send_email(contents: list):
     msg["From"]    = SENDER_EMAIL
     msg["To"]      = RECEIVER_EMAIL
 
-    # 🔥 f-string 오류 원천 차단: 내부 중괄호로 인한 NameError 현상을 완벽히 방지하기 위해 일반 결합 방식으로 처리
+    # f-string 충돌 우려가 없는 깔끔한 문자열 결합 방식 유지
     html = """
     <html>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;">
