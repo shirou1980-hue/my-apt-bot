@@ -2,8 +2,8 @@ name: Applyhome Automation Bot
 
 on:
   schedule:
-    - cron: '30 23 * * *' # 매일 아침 한국시간 08:30 자동 작동
-  workflow_dispatch: # 수동 실행 버튼 활성화
+    - cron: '30 23 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -11,10 +11,10 @@ jobs:
 
     steps:
     - name: 저장소 코드 체크아웃
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 파이썬 환경 설정
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
@@ -29,5 +29,4 @@ jobs:
       env:
         GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-        PUBLIC_DATA_API_KEY: ${{ secrets.PUBLIC_DATA_API_KEY }}
       run: python apt_bot.py
