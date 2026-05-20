@@ -5,6 +5,9 @@ import time
 from datetime import datetime
 import urllib.request
 import urllib.parse
+# 🔥 [치명적 누락 해결] 메일 조립에 필요한 핵심 파이썬 부품들을 상단에 명시합니다.
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 # ── 환경변수 ──────────────────────────────────────────────
 SMTP_SERVER      = "smtp.gmail.com"
@@ -23,11 +26,11 @@ def get_subscription_data() -> list:
         print("⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다.")
         return ["공공데이터 API 키가 누락되었습니다. GitHub Secrets를 확인해주세요."]
 
-    # 🔥 [핵심 개조] 날짜 제한을 두지 않고, 현재 유효한 전국의 아파트 청약 마스터 데이터를 대량 요청합니다.
+    # 현재 유효한 전국의 아파트 청약 마스터 데이터를 대량 요청
     base_url = "https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList"
     params = urllib.parse.urlencode({
         "serviceKey" : PUBLIC_API_KEY,
-        "numOfRows"        : "1000", # 현재 진행 중인 모든 단지를 담기 위해 넉넉히 설정
+        "numOfRows"        : "1000",
         "pageNo"           : "1",
         "_type"            : "json",
     })
@@ -59,8 +62,7 @@ def get_subscription_data() -> list:
             name = item.get("houseNm", "").strip()
             area = item.get("hssplyAdres", "").strip()
             
-            # 일반공급(1순위/2순위) 및 특별공급 접수 일정 추출
-            # 하이픈(-) 제거하여 순수 숫자로 변경
+            # 일반공급 및 특별공급 접수 일정 추출 (하이픈 제거)
             rcept_bgnde = item.get("rceptBgnde", "").replace("-", "").strip()
             rcept_endde = item.get("rceptEndde", "").replace("-", "").strip()
             
@@ -70,23 +72,21 @@ def get_subscription_data() -> list:
             is_today_active = False
             date_info = ""
 
-            # 1. 일반 공급 기간 체크 (시작일 <= 오늘 <= 종료일)
+            # 1. 일반 공급 기간 체크
             if rcept_bgnde and rcept_endde:
                 if int(rcept_bgnde) <= today_int <= int(rcept_endde):
                     is_today_active = True
                     date_info = f"일반접수: {rcept_bgnde} ~ {rcept_endde}"
 
-            # 2. 특별 공급 기간 체크 (시작일 <= 오늘 <= 종료일)
+            # 2. 특별 공급 기간 체크
             if not is_today_active and spt_bgnde and spt_endde:
                 if int(spt_bgnde) <= today_int <= int(spt_endde):
                     is_today_active = True
                     date_info = f"특공접수: {spt_bgnde} ~ {spt_endde}"
 
-            # 오늘 날짜가 청약 기간에 딱 걸려 있다면 결과 리스트에 추가
             if is_today_active:
                 results.append(f"{name} ({area}) | {date_info}")
 
-        # 중복 단지 제거 및 정렬
         results = sorted(list(set(results)))
         print(f"🎯 [필터링 완료] 오늘 접수 중인 아파트 총 {len(results)}건 매칭 성공")
         return results
