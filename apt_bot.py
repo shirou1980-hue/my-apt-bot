@@ -1,101 +1,96 @@
 import os
 import smtplib
-import json
 import time
 from datetime import datetime
-import urllib.request
-import urllib.parse
-# 🔥 [치명적 누락 해결] 메일 조립에 필요한 핵심 파이썬 부품들을 상단에 명시합니다.
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
-# ── 환경변수 ──────────────────────────────────────────────
 SMTP_SERVER      = "smtp.gmail.com"
 SMTP_PORT        = 587
 SENDER_EMAIL     = "shirou1980@gmail.com"
 SENDER_PASSWORD  = os.environ.get("GMAIL_PASSWORD")
 RECEIVER_EMAIL   = os.environ.get("RECEIVER_EMAIL")
-PUBLIC_API_KEY   = os.environ.get("PUBLIC_DATA_API_KEY", "")  # 공공데이터포털 키
 
-def get_subscription_data() -> list:
-    today = datetime.now()
-    today_str = today.strftime("%Y%m%d")
-    print(f"📅 수집 기준 날짜: {today.strftime('%Y-%m-%d')}")
-
-    if not PUBLIC_API_KEY:
-        print("⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다.")
-        return ["공공데이터 API 키가 누락되었습니다. GitHub Secrets를 확인해주세요."]
-
-    # 현재 유효한 전국의 아파트 청약 마스터 데이터를 대량 요청
-    base_url = "https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList"
-    params = urllib.parse.urlencode({
-        "serviceKey" : PUBLIC_API_KEY,
-        "numOfRows"        : "1000",
-        "pageNo"           : "1",
-        "_type"            : "json",
-    })
-    url = f"{base_url}?{params}"
-
+def get_subscription_data():
+    options = Options()
+    options.add_argument("--headless") 
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    
+    driver = webdriver.Chrome(options=options)
+    today_info = []
+    
     try:
-        print("[API] 공공데이터포털 청약 마스터 데이터 로딩 중...")
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8")
-        data = json.loads(raw)
-
-        body_obj = data.get("response", {}).get("body", {})
-        items_data = body_obj.get("items", {})
-
-        if not items_data or isinstance(items_data, str) or items_data == "":
-            print("[API] 현재 데이터포털에 등록된 청약 정보가 없습니다.")
-            return ["오늘 예정된 아파트 청약 접수 일정이 없습니다."]
-
-        items = items_data.get("item", [])
-        if isinstance(items, dict):
-            items = [items]
-
-        results = []
-        today_int = int(today_str)
-        print(f"[API] 총 {len(items)}건의 아파트 데이터 분석 및 오늘 자 일정 필터링 시작...")
-
-        for item in items:
-            name = item.get("houseNm", "").strip()
-            area = item.get("hssplyAdres", "").strip()
+        print("1. 청약홈 캘린더 직접 진입...")
+        driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
+        time.sleep(7)
+        
+        # [1차] sub_iframe 진입
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sub_iframe")))
+        driver.switch_to.frame("sub_iframe")
+        
+        # [2차] 안쪽 달력창 진입
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "iframe_calendar")))
+        driver.switch_to.frame("iframe_calendar")
+        time.sleep(3)
+        
+        # 오늘 날짜 추출 및 클릭
+        today_day = str(datetime.now().day)
+        print(f"2. 달력 내부에서 오늘 날짜({today_day}일) 단추 클릭 조작...")
+        
+        target_xpath = f"//div[@class='calendar_body']//td//a[text()='{today_day}' or normalize-space(text())='{today_day}']"
+        target_element = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.XPATH, target_xpath))
+        )
+        
+        driver.execute_script("arguments[0].click();", target_element)
+        print("-> [성공] 오늘 날짜 단추를 정상 클릭했습니다.")
+        print("-> 청약 데이터 통신 및 화면 로딩 대기 (7초)...")
+        time.sleep(7)
+        
+        # [프레임 탈출] 하단 리스트 구역을 읽기 위해 부모 프레임(sub_iframe)으로 이동
+        print("3. 리스트 데이터 수집을 위해 부모 프레임으로 복귀...")
+        driver.switch_to.parent_frame()
+        time.sleep(2)
+        
+        print("4. 업데이트가 완료된 최종 화면 소스 파싱 시작...")
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        list_area = soup.select_one("#sub_list_area")
+        
+        if list_area:
+            area_text = list_area.text.strip()
+            print(f"[서버 데이터 추출 원본]: {area_text[:60]}")
             
-            # 일반공급 및 특별공급 접수 일정 추출 (하이픈 제거)
-            rcept_bgnde = item.get("rceptBgnde", "").replace("-", "").strip()
-            rcept_endde = item.get("rceptEndde", "").replace("-", "").strip()
+            if "없습니다" in area_text or not area_text:
+                today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
+            else:
+                items = list_area.select("ul li")
+                for item in items:
+                    badge_el = item.select_one(".badge")
+                    tit_el = item.select_one(".tit")
+                    if badge_el and tit_el:
+                        today_info.append(f"[{badge_el.text.strip()}] {tit_el.text.strip()}")
+                        
+        if not today_info:
+            today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
             
-            spt_bgnde = item.get("sptPblancHseRceptBgnde", "").replace("-", "").strip()
-            spt_endde = item.get("sptPblancHseRceptEndde", "").replace("-", "").strip()
-
-            is_today_active = False
-            date_info = ""
-
-            # 1. 일반 공급 기간 체크
-            if rcept_bgnde and rcept_endde:
-                if int(rcept_bgnde) <= today_int <= int(rcept_endde):
-                    is_today_active = True
-                    date_info = f"일반접수: {rcept_bgnde} ~ {rcept_endde}"
-
-            # 2. 특별 공급 기간 체크
-            if not is_today_active and spt_bgnde and spt_endde:
-                if int(spt_bgnde) <= today_int <= int(spt_endde):
-                    is_today_active = True
-                    date_info = f"특공접수: {spt_bgnde} ~ {spt_endde}"
-
-            if is_today_active:
-                results.append(f"{name} ({area}) | {date_info}")
-
-        results = sorted(list(set(results)))
-        print(f"🎯 [필터링 완료] 오늘 접수 중인 아파트 총 {len(results)}건 매칭 성공")
-        return results
-
+        return today_info
+        
     except Exception as e:
-        print(f"❌ API 데이터 마스터 분석 중 오류 발생: {e}")
-        return [f"데이터 수집 중 예외 발생: {e}"]
+        print(f"❌ 크롤링 에러 발생: {e}")
+        return None
+    finally:
+        driver.quit()
 
-def send_email(contents: list):
+def send_email(contents):
     today_str = datetime.now().strftime("%Y-%m-%d")
     no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "예외"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
