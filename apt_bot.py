@@ -29,50 +29,47 @@ def get_subscription_data():
     today_info = []
     
     try:
-        print("1. 청약홈 달력 메인 주소 직접 타격...")
+        print("1. 청약홈 달력 주소 접속...")
         driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
         time.sleep(6)
         
-        # [1차 침투] sub_iframe 뚫기
-        print("2. 1차 보안창(sub_iframe) 진입 중...")
+        # [1차 진입] sub_iframe 진입
+        print("2. 1차 보안창(sub_iframe) 진입...")
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sub_iframe")))
         driver.switch_to.frame("sub_iframe")
-        time.sleep(2)
+        time.sleep(1)
         
-        # 🔥 [2차 핵심 침투] 진짜 달력이 들어있는 안쪽 iframe_calendar까지 한 번 더 들어갑니다!
-        print("3. 2차 달력 핵심창(iframe_calendar) 내부로 최종 순간이동...")
+        # [2차 진입] 달력이 있는 안쪽 iframe_calendar 진입
+        print("3. 2차 달력창(iframe_calendar) 침투...")
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "iframe_calendar")))
         driver.switch_to.frame("iframe_calendar")
+        time.sleep(2)
+        
+        # 오늘 날짜 타격
+        today_day = str(datetime.now().day)
+        print(f"4. 오늘 날짜({today_day}일) 버튼 클릭 시도...")
+        
+        target_xpath = f"//div[@class='calendar_body']//td//a[text()='{today_day}' or normalize-space(text())='{today_day}']"
+        target_element = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.XPATH, target_xpath))
+        )
+        driver.execute_script("arguments[0].click();", target_element)
+        print("-> [성공] 날짜 단추 클릭 완료!")
         time.sleep(3)
         
-        # 오늘 날짜 숫자 구하기
-        today_day = str(datetime.now().day)
-        print(f"4. 최종 도달한 달력에서 오늘 날짜({today_day}일) 단추 정밀 조준...")
+        # 🔥 [진짜 핵심 수정] 하단 리스트를 읽기 위해 안쪽 방에서 '바깥 창(sub_iframe)'으로 다시 탈출합니다!
+        print("5. 데이터 수집을 위해 부모 프레임(sub_iframe)으로 복귀...")
+        driver.switch_to.parent_frame() 
+        print("-> 탈출 성공! 하단 데이터 갱신 대기 (5초)...")
+        time.sleep(5)
         
-        # 2차 iframe 내부에서 오늘 날짜 글자를 정확히 가진 a 태그를 XPATH로 직격합니다.
-        # 숫자만 단독으로 일치하는 날짜 링크를 정확하게 찾아냅니다.
-        target_xpath = f"//div[@class='calendar_body']//td//a[text()='{today_day}' or normalize-space(text())='{today_day}']"
-        
-        try:
-            target_element = WebDriverWait(driver, 15).until(
-                EC.element_to_be_clickable((By.XPATH, target_xpath))
-            )
-            print("-> 오늘 날짜 단추 조준 성공! 마우스 클릭 이벤트를 강제 주입합니다.")
-            driver.execute_script("arguments[0].click();", target_element)
-            print("-> 클릭 성공! 하단 데이터베이스 동기화 대기 (8초)...")
-            time.sleep(8)
-        except Exception as click_err:
-            print(f"⚠️ 날짜 단추 타격 실패(기본 전체 긁기 전환): {click_err}")
-            
-        print("5. 업데이트된 화면에서 아파트 공급 정보 추출 중...")
+        print("6. 갱신 완료된 하단 구역에서 아파트 명단 추출...")
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        
-        # 아파트 정보 리스트가 담기는 진짜 알맹이 id 구역 타격
         list_area = soup.select_one("#sub_list_area")
         
         if list_area:
             area_text = list_area.text.strip()
-            print(f"[서버 데이터 확인용 로그]: {area_text[:60]}")
+            print(f"[서버 응답 실시간 확인]: {area_text[:60]}")
             
             if "없습니다" in area_text or not area_text:
                 today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
@@ -90,7 +87,7 @@ def get_subscription_data():
         return today_info
         
     except Exception as e:
-        print(f"❌ 크롤링 치명적 에러 발생: {e}")
+        print(f"❌ 크롤링 에러 발생: {e}")
         return None
     finally:
         driver.quit()
