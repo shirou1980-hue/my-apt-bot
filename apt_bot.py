@@ -11,23 +11,20 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-# 깃허브 금고(Secrets)에서 정보를 안전하게 꺼내옵니다.
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "shirou1980@gmail.com" # 보내는 사람 고정
+SENDER_EMAIL = "shirou1980@gmail.com"
 SENDER_PASSWORD = os.environ.get("GMAIL_PASSWORD")
 RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL")
 
 def get_subscription_data():
     options = Options()
-    # 깃허브 리눅스 가상 서버를 위한 필수 최적화 설정
     options.add_argument("--headless") 
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     options.add_argument("--disable-blink-features=AutomationControlled")
     
-    # 깃허브 환경에 내장된 크롬 드라이버와 연동
     driver = webdriver.Chrome(options=options)
     
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -35,32 +32,38 @@ def get_subscription_data():
     })
     
     try:
-        print("1. 청약홈 데이터 세션 생성 중...")
+        print("1. 청약홈 메인 세션 생성 중...")
         driver.get("https://www.applyhome.co.kr/co/coa/selectMainView.do")
         time.sleep(5)
         
-        # 관리자 에러를 피하기 위해 정상적인 경로로 이동
-        print("2. 청약 캘린더 페이지 진입 중...")
+        print("2. 청약 캘린더 페이지 진입...")
         driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
         
+        # 달력 기본 뼈대가 뜰 때까지 대기
         WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CLASS_NAME, "calendar_body"))
         )
+        # 🔥 [핵심 보완] 달력 내부 자바스크립트 엔진이 완전히 충전될 때까지 10초간 충분히 멍 때립니다.
+        print("-> 페이지 내부 시스템 안정화 대기 중 (10초)...")
+        time.sleep(10)
         
-        # 오늘 날짜 (예: 20260520) 형태로 정밀 데이터 요청
         target_date = datetime.now().strftime("%Y%m%d")
         today_info = []
         
-        print(f"3. 청약 데이터 통로 직접 개방 ({target_date})...")
+        print(f"3. 청약 데이터 통로에 강제 명령 주입 ({target_date})...")
         driver.execute_script(f"setCalenderDetailList('{target_date}')")
-        time.sleep(5)
         
-        print("4. 데이터 수집 및 파싱 시작...")
+        # 🔥 [핵심 보완] 명령 주입 후 하단에 아파트 이름 리스트가 새로 그려질 때까지 7초간 넉넉히 대기합니다.
+        time.sleep(7)
+        
+        print("4. 새로 갱신된 하단 데이터 추출 중...")
         soup = BeautifulSoup(driver.page_source, "html.parser")
         list_area = soup.select_one("#sub_list_area")
         
         if list_area:
             area_text = list_area.text.strip()
+            print(f"[서버 디버깅 텍스트]: {area_text[:50]}")
+            
             if "없습니다" in area_text or not area_text:
                 today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
             else:
@@ -84,10 +87,11 @@ def get_subscription_data():
 def send_email(contents):
     if not contents or "없습니다" in contents[0]:
         display_text = contents[0] if contents else "오늘 예정된 아파트 청약 접수 일정이 없습니다."
-        contents_html = f"<p style='color: #666; font-size: 14px; font-weight: bold; text-align: center; padding: 15px 0;'>ℹ️ {display_text}</p>"
+        contents_html = f"<p style='color: #666; font-size: 14px; font-weight: bold; text-align: center; padding: 10px 0;'>ℹ️ {display_text}</p>"
     else:
-        list_items = "".join([f"<li style='margin: 8px 0; font-size: 14px; font-weight: bold; color: #333;'>{item}</li>" for item in contents])
-        contents_html = f"<ul style='padding-left: 20px;'>{list_items}</ul>"
+        # 아파트 이름이 나오면 눈에 확 띄도록 주황색 굵은 글씨 스타일 부여
+        list_items = "".join([f"<li style='margin: 10px 0; font-size: 15px; font-weight: bold; color: #e65c00;'>🏢 {item}</li>" for item in contents])
+        contents_html = f"<ul style='padding-left: 20px; list-style-type: none;'>{list_items}</ul>"
         
     today_str = datetime.now().strftime("%Y-%m-%d")
     msg = MIMEMultipart("alternative")
