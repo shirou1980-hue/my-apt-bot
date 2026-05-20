@@ -30,7 +30,7 @@ def get_subscription_data():
     try:
         print("1. 청약홈 페이지 접속...")
         driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
-        time.sleep(5)
+        time.sleep(6)
         
         # 가상 창(iframe) 진입
         WebDriverWait(driver, 20).until(
@@ -44,28 +44,25 @@ def get_subscription_data():
         today_info = []
         
         print(f"2. 달력에서 오늘 날짜({today_day}일) 칸 찾는 중...")
-        # 달력 내부의 모든 td 태그를 뒤집니다.
         cells = driver.find_elements(By.CSS_SELECTOR, ".calendar_body td")
         
         target_element = None
         for cell in cells:
-            # cell 내부의 a 태그나 text를 확인하여 오늘 날짜와 일치하는지 체크
-            a_tags = cell.find_elements(By.TAG_CODES, "a")
+            # ⚠️ 오타 수정 완료: TAG_CODES -> TAG_NAME
+            a_tags = cell.find_elements(By.TAG_NAME, "a")
             if a_tags:
                 text_parts = cell.text.split('\n')
                 if text_parts[0].strip() == today_day:
-                    # 오늘 날짜 칸에 있는 실제 클릭 가능한 링크(a 태그)를 타깃으로 지정
                     target_element = a_tags[0]
                     break
         
         if target_element:
             print("-> 오늘 날짜 버튼 발견! 마우스 클릭 시도...")
-            # 브라우저에게 해당 엘리먼트를 진짜로 클릭하라고 직접 명령 전달
             driver.execute_script("arguments[0].click();", target_element)
-            print("-> 클릭 명령 전달 완료. 데이터 로딩 대기 (7초)...")
+            print("-> 클릭 완료. 데이터 로딩 대기 (7초)...")
             time.sleep(7)
         else:
-            print("⚠️ 오늘 날짜 버튼을 찾지 못했습니다. 기본 화면으로 수집을 진행합니다.")
+            print("⚠️ 오늘 날짜 버튼을 찾지 못했습니다.")
             
         print("3. 화면 소스 긁어오기...")
         soup = BeautifulSoup(driver.page_source, "html.parser")
