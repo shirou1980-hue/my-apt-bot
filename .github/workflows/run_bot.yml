@@ -1,0 +1,31 @@
+name: Applyhome Automation Bot
+
+on:
+  schedule:
+    # 매일 아침 한국시간(KST) 오전 8시 30분에 알아서 비서를 가동시킵니다.
+    - cron: '30 23 * * *'
+  workflow_dispatch: # 내가 필요할 때 버튼을 눌러 즉시 실행하는 스위치 활성화
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 1. 설계도 파일 복사
+      uses: actions/checkout@v3
+
+    - name: 2. 파이썬 환경 구축
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 3. 라이브러리 자동 설치
+      run: |
+        python -m pip install --upgrade pip
+        pip install selenium beautifulsoup4
+
+    - name: 4. 로봇 가동 및 메일 전송
+      env:
+        GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+        RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+      run: python apt_bot.py
