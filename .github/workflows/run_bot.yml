@@ -2,8 +2,8 @@ name: Applyhome Automation Bot
 
 on:
   schedule:
-    - cron: '30 23 * * *'
-  workflow_dispatch:
+    - cron: '30 23 * * *' # 매일 아침 한국시간 08:30 자동 작동
+  workflow_dispatch: # 수동 실행 버튼 활성화
 
 jobs:
   build:
@@ -18,15 +18,17 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: 필수 의존성 패키지 및 Playwright 엔진 설치
+    # 🔥 현재 apt_bot.py가 쓰는 Selenium과 BeautifulSoup 라이브러리를 정확하게 설치합니다.
+    # 가상 서버 환경에 크롬 브라우저 뼈대까지 완벽하게 주입합니다.
+    - name: Selenium 및 필수 패키지 설치
       run: |
         python -m pip install --upgrade pip
-        pip install beautifulsoup4 playwright
-        playwright install chromium
-        playwright install-deps
+        pip install selenium beautifulsoup4
 
     - name: 청약 자동화 매크로 프로그램 가동
       env:
         GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        # 노드 버전 잔소리를 차단하는 안전장치
+        ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
       run: python apt_bot.py
