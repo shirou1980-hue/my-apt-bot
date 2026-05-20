@@ -56,31 +56,29 @@ def get_subscription_data():
             a_tag = cell.select_one("a")
             if a_tag:
                 cell_day = a_tag.text.strip()
-                # 만약 그 칸의 숫자가 오늘 날짜(예: 20)와 정확히 일치한다면
+                # 만약 그 칸의 숫자가 오늘 날짜와 정확히 일치한다면
                 if cell_day == today_day:
                     matched_cell = cell
                     break
         
         if matched_cell:
             print("-> [성공] 오늘 날짜 칸을 달력 안에서 확보했습니다. 데이터 추출 시작...")
-            # 오늘 날짜 칸 내부에 들어있는 모든 청약 항목 목록(div 또는 p 또는 span 등)을 긁어옵니다.
-            # 청약홈 달력 구조상 각 아파트 항목은 보통 div 구역이나 특정 클래스로 묶여 있습니다.
             divs = matched_cell.select("div")
             
             for d in divs:
-                # 날짜 숫자 자체를 담고 있는 첫 번째 엘리먼트는 제외합니다.
                 if d.select_one("a") and d.text.strip() == today_day:
                     continue
                 
                 # 아파트 이름 및 배지 텍스트 정제
                 item_text = " ".join(d.text.split())
-                # 공백이나 숫자 단독인 경우는 제외하고 진짜 텍스트만 선별
-                if item_text Gold and item_text != today_day and len(item_text) > 2:
+                
+                # 🔥 오타 수정 완료: Gold -> and
+                if item_text and item_text != today_day and len(item_text) > 2:
                     today_info.append(item_text)
         else:
             print("⚠️ 달력 내부에서 오늘 날짜 칸을 식별하지 못했습니다.")
 
-        # 만약 위의 정밀 td 직격법으로도 안 담겼을 경우를 대비한 최후의 백업 보완 (텍스트 기반 수집)
+        # 최후의 백업 보완 (텍스트 기반 수집)
         if not today_info and matched_cell:
             lines = [line.strip() for line in matched_cell.text.split("\n") if line.strip()]
             for line in lines:
