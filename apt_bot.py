@@ -42,7 +42,7 @@ def get_subscription_data():
         driver.switch_to.frame("iframe_calendar")
         time.sleep(2)
         
-        # 오늘 날짜 단추 탐색 및 조준
+        # 오늘 날짜 단추 탐색 및 클릭
         today_day = str(datetime.now().day)
         print(f"2. 달력 내부에서 오늘 날짜({today_day}일) 단추 강제 클릭...")
         
@@ -51,47 +51,35 @@ def get_subscription_data():
             EC.element_to_be_clickable((By.XPATH, target_xpath))
         )
         
-        # 날짜 단추 클릭
         driver.execute_script("arguments[0].click();", target_element)
         print("-> [성공] 오늘 날짜 단추 클릭 명령 전송 완료.")
         
-        # [중요] 리스트 영역은 sub_iframe에 속하므로 클릭 직후 즉시 한 단계 바깥 창으로 복귀
+        # 리스트 구역 접근을 위해 부모 프레임 원복
         driver.switch_to.parent_frame()
         
-        # 🔥 [진짜 최종 해결책: 물리 엘리먼트 렌더링 동기화]
-        # 하단 리스트 영역(#sub_list_area) 내부에 실제 아파트 이름 태그('.tit')가 
-        # 화면에 완전히 나타나서 채워질 때까지 브라우저를 최대 15초간 강제로 붙잡아 둡니다.
-        print("3. 비동기 데이터 수집 및 하단 아파트 명단 렌더링 대기 감시 (최대 15초)...")
-        try:
-            WebDriverWait(driver, 15).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, "#sub_list_area .tit"))
-            )
-            print("-> [감시 성공] 하단 영역에 실제 아파트 공급 정보 렌더링 포착 완료!")
-        except Exception as wait_err:
-            print(f"⚠️ 정밀 감시 타임아웃 또는 오늘 진짜 일정이 없음: {wait_err}")
-            print("-> 안전 수집을 위해 5초 추가 대기 후 진행합니다.")
-            time.sleep(5)
+        print("3. 비동기 하단 아파트 명단 로딩 대기 (5초)...")
+        time.sleep(5)
             
-        print("4. 화면 렌더링 완료. 아파트 명단 최종 추출 시작...")
+        print("4. 아파트 명단 전체 추출 시작...")
         soup = BeautifulSoup(driver.page_source, "html.parser")
         list_area = soup.select_one("#sub_list_area")
         
         if list_area:
             area_text = list_area.text.strip()
-            print(f"[서버 응답 데이터 로그]: {area_text[:60]}")
             
             if "없습니다" in area_text or not area_text:
-                today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
+                today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
             else:
+                # 🔥 [핵심 수정] 특정 배지만 거르지 않고, 오늘 날짜 목록에 뜨는 모든 li 항목을 통째로 가져옵니다.
                 items = list_area.select("ul li")
                 for item in items:
-                    badge_el = item.select_one(".badge")
-                    tit_el = item.select_one(".tit")
-                    if badge_el and tit_el:
-                        today_info.append(f"[{badge_el.text.strip()}] {tit_el.text.strip()}")
+                    # 항목 안의 전체 텍스트를 깔끔하게 정리하여 가져옴
+                    item_text = " ".join(item.text.split())
+                    if item_text:
+                        today_info.append(item_text)
                         
         if not today_info:
-            today_info.append("오늘 예정된 아파트 청약 접수 일정이 없습니다.")
+            today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
             
         return today_info
         
@@ -107,7 +95,7 @@ def send_email(contents):
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
     if no_data:
-        text = contents[0] if contents else "오늘 예정된 아파트 청약 접수 일정이 없습니다."
+        text = contents[0] if contents else "오늘 예정된 아파트 청약 공급 일정이 없습니다."
         body_html = "<p style='color:#666;font-size:14px;font-weight:bold;text-align:center;padding:15px 0;'>ℹ️ " + text + "</p>"
     else:
         items_html = "".join(["<li style='margin:12px 0;font-size:15px;font-weight:bold;color:#0056b3;border-bottom:1px dashed #eee;padding-bottom:8px;'>🏢 " + item + "</li>" for item in contents])
@@ -122,7 +110,7 @@ def send_email(contents):
     <html>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;">
       <h2 style="color:#0056b3;border-bottom:2px solid #0056b3;padding-bottom:10px;margin-bottom:20px;">🏠 청약Home 오늘의 아파트 공급 정보</h2>
-      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 접수 진행 중인 아파트 목록입니다.</p>
+      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 진행 중인 아파트 일정 목록입니다.</p>
       <div style="background-color:#f8f9fa;padding:20px;border-radius:5px;border:1px solid #e9ecef;margin:20px 0;">
         """ + body_html + """
       </div>
