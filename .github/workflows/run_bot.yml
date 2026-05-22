@@ -18,9 +18,12 @@ jobs:
       with:
         python-version: '3.10'
 
+    - name: 크롤러 전용 의존성 라이브러리 및 크롬 설치
+      run: |
+        pip install selenium beautifulsoup4
+
     - name: 청약 자동화 매크로 프로그램 가동
       env:
         GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-        PUBLIC_DATA_API_KEY: ${{ secrets.PUBLIC_DATA_API_KEY }}
       run: python apt_bot.py
