@@ -17,8 +17,8 @@ from pathlib import Path
 # ── 환경변수 (GitHub Secrets) ─────────────────────────────
 SMTP_SERVER     = "smtp.gmail.com"
 SMTP_PORT       = 587
-SENDER_EMAIL    = os.environ["GMAIL_ADDRESS"]
-SENDER_PASSWORD = os.environ["GMAIL_APP_PW"]
+SENDER_EMAIL    = "shirou1980@gmail.com"
+SENDER_PASSWORD = os.environ["GMAIL_PASSWORD"]
 RECEIVER_EMAIL  = os.environ["RECEIVER_EMAIL"]
 
 TARGET_URL      = "https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do"
