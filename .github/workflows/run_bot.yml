@@ -2,7 +2,7 @@ name: Applyhome Automation Bot
 
 on:
   schedule:
-    - cron: '30 23 * * *' # 매일 아침 한국시간 08:30 자동 작동
+    - cron: '30 23 * * *' # 매일 아침 한국시간 08:30 자동 가동
   workflow_dispatch: # 수동 실행 버튼
 
 jobs:
@@ -22,4 +22,5 @@ jobs:
       env:
         GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        PUBLIC_DATA_API_KEY: ${{ secrets.PUBLIC_DATA_API_KEY }}
       run: python apt_bot.py
