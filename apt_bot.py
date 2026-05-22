@@ -160,12 +160,17 @@ def send_email(today_info: list[str], screenshot_ok: bool):
         list_html = f"<ul style='padding-left:10px;list-style:none;'>{items_html}</ul>"
 
     # 스크린샷 유무에 따라 img 태그 분기
-    img_html = (
-        '<img src="cid:calendar_image" '
-        'style="width:100%;border:1px solid #ddd;border-radius:8px;margin-top:16px;display:block;">'
-        if screenshot_ok else
-        '<p style="color:#aaa;font-size:12px;">※ 달력 이미지를 불러오지 못했습니다.</p>'
-    )
+    img_html = f'''
+<a href="{TARGET_URL}"
+   style="display:block;text-align:center;padding:20px;background:#f0f4ff;
+          border-radius:8px;border:2px solid #0056b3;text-decoration:none;margin-top:16px;">
+  <span style="font-size:18px;font-weight:bold;color:#0056b3;">
+    📅 청약홈 달력 바로가기 →
+  </span><br>
+  <span style="font-size:12px;color:#888;margin-top:6px;display:block;">
+    applyhome.co.kr
+  </span>
+</a>'''
 
     html = f"""
     <html>
