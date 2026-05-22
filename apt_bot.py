@@ -1,111 +1,101 @@
 import os
 import smtplib
-import json
+import time
 from datetime import datetime
-import urllib.request
-import urllib.parse
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
-# ── 환경변수 ──────────────────────────────────────────────
 SMTP_SERVER      = "smtp.gmail.com"
 SMTP_PORT        = 587
 SENDER_EMAIL     = "shirou1980@gmail.com"
 SENDER_PASSWORD  = os.environ.get("GMAIL_PASSWORD")
 RECEIVER_EMAIL   = os.environ.get("RECEIVER_EMAIL")
-PUBLIC_API_KEY   = os.environ.get("PUBLIC_DATA_API_KEY", "")  # 공공데이터포털 키
 
-def get_subscription_data() -> list:
-    today = datetime.now()
-    today_str = today.strftime("%Y%m%d") # 예: '20260522'
-    print(f"📅 수집 기준 날짜: {today.strftime('%Y-%m-%d')}")
-
-    if not PUBLIC_API_KEY:
-        print("⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다.")
-        return ["공공데이터 API 키가 누락되었습니다. GitHub Secrets를 확인해주세요."]
-
-    # 유효한 전국의 아파트 청약 공급 마스터 데이터를 대량 요청합니다.
-    base_url = "https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList"
-    params = urllib.parse.urlencode({
-        "serviceKey" : PUBLIC_API_KEY,
-        "numOfRows"        : "1000", # 누락 방지를 위해 넉넉히 설정
-        "pageNo"           : "1",
-        "_type"            : "json",
-    })
-    url = f"{base_url}?{params}"
-
+def get_subscription_data():
+    options = Options()
+    options.add_argument("--headless") 
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    
+    # 🔥 [핵심] 깃허브 가상 서버에서 모바일 모드로 쪼그라드는 것을 막기 위해 가상 창 크기를 대형 PC 화면으로 고정합니다.
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--start-maximized")
+    
+    driver = webdriver.Chrome(options=options)
+    today_info = []
+    
     try:
-        print("[API] 공공데이터포털 청약 마스터 데이터 수집 시작...")
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8")
-        data = json.loads(raw)
-
-        body_obj = data.get("response", {}).get("body", {})
-        items_data = body_obj.get("items", {})
-
-        if not items_data or isinstance(items_data, str) or items_data == "":
-            print("[API] 현재 데이터포털에 등록된 유효 청약 정보가 없습니다.")
-            return ["오늘 예정된 아파트 청약 공급 일정이 없습니다."]
-
-        items = items_data.get("item", [])
-        if isinstance(items, dict):
-            items = [items]
-
-        results = []
-        today_int = int(today_str)
-        print(f"[API] 총 {len(items)}건의 아파트 데이터 중 오늘 자 [접수/발표/계약] 일정 정밀 매칭 시작...")
-
-        for item in items:
-            name = item.get("houseNm", "").strip()
-            area = item.get("hssplyAdres", "").strip()
+        print("1. 청약홈 달력 주소 대형 PC 모드로 접속...")
+        driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
+        
+        # 청약홈 내부 보안 프레임(iframe)이 완전히 로딩될 때까지 넉넉히 대기합니다.
+        time.sleep(10)
+        
+        # [1차 진입] sub_iframe
+        WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.ID, "sub_iframe")))
+        driver.switch_to.frame("sub_iframe")
+        
+        # [2차 진입] iframe_calendar (진짜 달력 알맹이)
+        WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.ID, "iframe_calendar")))
+        driver.switch_to.frame("iframe_calendar")
+        
+        # 달력 내부의 비동기 텍스트 데이터들이 완전히 렌더링될 때까지 최종 대기
+        time.sleep(5)
+        
+        # 오늘 날짜 구하기
+        today_day = str(datetime.now().day)
+        print(f"2. 달력 전수 조사 시작: 오늘 날짜({today_day}일) 칸 물리적 텍스트 타격...")
+        
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        cells = soup.select(".calendar_body td")
+        
+        matched_cell = None
+        for cell in cells:
+            a_tag = cell.select_one("a")
+            if a_tag:
+                cell_day = a_tag.text.strip()
+                # 달력 칸 안의 날짜 숫자가 오늘 날짜와 정확히 일치하는 칸을 확보
+                if cell_day == today_day:
+                    matched_cell = cell
+                    break
+        
+        if matched_cell:
+            print("-> [성공] 대형 달력 내부에서 오늘 날짜 칸 구역을 확보했습니다.")
+            # 해당 날짜 칸 안에 들어있는 줄바꿈 단위 텍스트들을 쪼개서 정리합니다.
+            lines = [line.strip() for line in matched_cell.text.split("\n") if line.strip()]
             
-            # 1. 일반공급 및 특별공급 접수 일정 추출 (하이픈 제거)
-            rcept_bgnde = item.get("rceptBgnde", "").replace("-", "").strip()
-            rcept_endde = item.get("rceptEndde", "").replace("-", "").strip()
-            spt_bgnde = item.get("sptPblancHseRceptBgnde", "").replace("-", "").strip()
-            spt_endde = item.get("sptPblancHseRceptEndde", "").replace("-", "").strip()
+            for line in lines:
+                # 오늘 날짜 숫자 자체이거나 너무 짧은 노이즈 텍스트는 필터링하여 제외
+                if line != today_day and len(line) > 1:
+                    clean_text = " ".join(line.split())
+                    today_info.append(clean_text)
+                    
+            print(f"-> 오늘 자 일정 총 {len(today_info)}건 획득 성공.")
+        else:
+            print("⚠️ 달력 내부에서 오늘 날짜 칸을 식별하지 못했습니다.")
+
+        if not today_info:
+            today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
             
-            # 🔥 [핵심 추가] 달력 누락의 주범이었던 당첨자 발표일 및 계약 일정 변수 정밀 추적
-            przwin_pblanc_de = item.get("przwinPblancDe", "").replace("-", "").strip()
-            cntrct_bgnde = item.get("cntrctBgnde", "").replace("-", "").strip()
-            cntrct_endde = item.get("cntrctEndde", "").replace("-", "").strip()
-
-            active_schedules = []
-
-            # 1) 오늘 날짜가 일반 청약 접수 기간에 걸쳐 있는지 확인
-            if rcept_bgnde and rcept_endde and int(rcept_bgnde) <= today_int <= int(rcept_endde):
-                active_schedules.append("일반접수")
-            
-            # 2) 오늘 날짜가 특별공급 접수 기간에 걸쳐 있는지 확인
-            if spt_bgnde and spt_endde and int(spt_bgnde) <= today_int <= int(spt_endde):
-                active_schedules.append("특공접수")
-                
-            # 3) 오늘이 당첨자 발표일인지 확인
-            if przwin_pblanc_de and int(przwin_pblanc_de) == today_int:
-                active_schedules.append("당첨자발표")
-                
-            # 4) 오늘 날짜가 계약 진행 기간에 걸쳐 있는지 확인
-            if cntrct_bgnde and cntrct_endde and int(cntrct_bgnde) <= today_int <= int(cntrct_endde):
-                active_schedules.append("계약일")
-
-            # 네 가지 조건 중 오늘 하나라도 해당한다면 리스트에 적재
-            if active_schedules:
-                schedule_tag = "/".join(active_schedules)
-                results.append(f"[{schedule_tag}] {name} ({area})")
-
-        # 중복 데이터 제거 및 정렬
-        results = sorted(list(set(results)))
-        print(f"🎯 [매칭 완료] 오늘 일정에 해당하는 아파트 총 {len(results)}건 선별 성공.")
-        return results
-
+        return today_info
+        
     except Exception as e:
-        print(f"❌ API 데이터 마스터 분석 중 오류 발생: {e}")
-        return [f"공공데이터 수집 중 예외 발생: {e}"]
+        print(f"❌ 크롤링 매크로 제어 중 오류 발생: {e}")
+        return [f"청약홈 웹 크롤링 중 에러 발생: {e}"]
+    finally:
+        driver.quit()
 
-def send_email(contents: list):
+def send_email(contents):
     today_str = datetime.now().strftime("%Y-%m-%d")
-    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "예외"]
+    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
     if no_data:
@@ -124,11 +114,11 @@ def send_email(contents: list):
     <html>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;">
       <h2 style="color:#0056b3;border-bottom:2px solid #0056b3;padding-bottom:10px;margin-bottom:20px;">🏠 청약Home 오늘의 아파트 공급 정보</h2>
-      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 진행 중인 전체 청약/발표/계약 일정 목록입니다.</p>
+      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 달력에 등록된 전체 일정(접수/발표/계약) 목록입니다.</p>
       <div style="background-color:#f8f9fa;padding:20px;border-radius:5px;border:1px solid #e9ecef;margin:20px 0;">
         """ + body_html + """
       </div>
-      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 안정적인 국가 공공데이터포털 API 연계를 통해 발송되었습니다.</p>
+      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 청약홈 대형 PC 달력 뷰 스캔 자동화를 통해 발송되었습니다.</p>
     </body>
     </html>"""
 
