@@ -20,39 +20,51 @@ def get_subscription_data():
 
     today_info = []
 
-    # 🔥 Playwright를 켜서 청약홈 내부 보안 프레임과 비동기 데이터를 완벽하게 렌더링합니다.
     with sync_playwright() as p:
         try:
-            print("[인프라 가동] Playwright 가상 대형 PC 브라우저 구동...")
-            # 대형 화면 해상도를 강제 주입하여 모바일 달력으로 쪼그라드는 것을 원천 차단합니다.
+            print("[인프라 가동] Playwright 가상 대형 PC 브라우저 런칭...")
             browser = p.chromium.launch(headless=True)
+            # 대형 화면 해상도를 주입하여 반응형 모바일 모드를 강제 분쇄합니다.
             context = browser.new_context(viewport={"width": 1920, "height": 1080})
             page = context.new_page()
             
-            print("-> 청약홈 메인 달력 주소 진입 중...")
+            print("-> 청약홈 메인 달력 보안 관문 진입...")
             page.goto("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do", timeout=60000)
             
-            # 🔥 [가장 중요] 가상 서버의 네트워크 딜레이를 감안하여 화면이 완전히 그려질 때까지 12초간 대기합니다.
-            print("-> 청약홈 보안 프레임 및 달력 데이터 최종 로딩 대기 (12초)...")
-            time.sleep(12)
-            
-            # 2중 iframe의 장벽을 뚫고 내부 진짜 달력 알맹이 코드를 강제 획득합니다.
-            print("-> 2중 보안 프레임 우회 및 달력 HTML 소스 크롭 시작...")
-            
-            # 1차 sub_iframe 진입 후 안쪽 2차 iframe_calendar 진입
+            # [1차 징검다리] sub_iframe 프레임 뼈대 장착 대기
+            page.wait_for_selector("#sub_iframe", timeout=15000)
             main_frame = page.frame(name="sub_iframe")
+            
             if main_frame:
-                calendar_frame = main_frame.child_frames[0] if main_frame.child_frames else main_frame
+                print("-> 1차 sub_iframe 진입 성공. 내부 달력 렌더링 감시단 가동...")
+                # 2차 내부 달력 프레임 뼈대가 완전히 구성될 때까지 추적 대기
+                main_frame.wait_for_selector("#iframe_calendar", timeout=15000)
+                
+                calendar_frame = None
                 for f in main_frame.child_frames:
                     if f.name == "iframe_calendar":
                         calendar_frame = f
                         break
                 
-                html_content = calendar_frame.content()
+                if calendar_frame:
+                    # 🔥 [진짜 최종 근본 해결책: 물리 텍스트 로딩 정밀 감시]
+                    # 단순히 sleep으로 노는 것이 아니라, 달력 칸 내부(.calendar_body td)에 아파트 텍스트 정보가 
+                    # 한 줄이라도 브라우저 메모리에 완벽하게 그려져서 렌더링될 때까지 물리적으로 대기합니다.
+                    print("-> [정밀 동기화] 달력 내부에 진짜 청약 데이터 글자가 인쇄될 때까지 대기 감시 중...")
+                    try:
+                        calendar_frame.wait_for_selector(".calendar_body td a, .calendar_body font", timeout=20000)
+                        print("-> [감시 성공] 청약홈 진짜 알맹이 데이터 렌더링 완벽 포착!")
+                    except:
+                        print("⚠️ 정밀 감시 타임아웃: 안전 수집을 위해 추가 시간 정지(5초)를 부여합니다.")
+                        time.sleep(5)
+                        
+                    html_content = calendar_frame.content()
+                else:
+                    html_content = page.content()
             else:
-                # 프레임 구조가 안 잡힐 경우 전체 페이지 긁기 백업
                 html_content = page.content()
 
+            print("-> 달력 소스 내부 텍스트 복사 및 필터링 오려내기 시작...")
             soup = BeautifulSoup(html_content, "html.parser")
             cells = soup.select(".calendar_body td, table td")
             print(f"-> 검색된 달력 그리드 칸 수: {len(cells)}개")
@@ -67,25 +79,24 @@ def get_subscription_data():
                     break
                     
             if matched_cell:
-                print(f"-> [성공] 대형 달력 내부에서 오늘({today_day}일) 자 데이터 구역 매칭 성공!")
+                print(f"-> [성공] 오늘({today_day}일) 자 칸 구역 확보 완료.")
                 raw_lines = [line.strip() for line in matched_cell.get_text(separator="\n").split("\n") if line.strip()]
                 
                 for line in raw_lines:
-                    # 오늘 날짜 숫자 자체이거나 노이즈 제거
                     if line != today_day and len(line) > 1:
                         clean_text = " ".join(line.split())
                         today_info.append(clean_text)
             else:
-                print("⚠️ 달력 소스 내부에서 오늘 날짜 칸을 최종 식별하지 못했습니다.")
+                print("⚠️ 달력 내부에서 오늘 날짜 구역 파싱을 전면 놓쳤습니다.")
 
         except Exception as e:
-            print(f"❌ 크롤링 매크로 구동 중 치명적 예외 발생: {e}")
-            return [f"청약홈 시스템 제어 에러 발생: {e}"]
+            print(f"❌ 매크로 제어 엔진 작동 중 예외 발생: {e}")
+            return [f"청약홈 매크로 제어 예외 발생: {e}"]
         finally:
             browser.close()
 
-    # 중복 제거 및 정렬
     today_info = sorted(list(set(today_info)))
+    print(f"📋 최종 빌드된 메일 발송 데이터 목록: {today_info}")
     
     if not today_info:
         today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
@@ -117,7 +128,7 @@ def send_email(contents):
       <div style="background-color:#f8f9fa;padding:20px;border-radius:5px;border:1px solid #e9ecef;margin:20px 0;">
         {body_html}
       </div>
-      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 인프라 환경이 완벽히 검증된 Playwright 무결점 매크로 엔진을 통해 발송되었습니다.</p>
+      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 인프라 타이밍 레이더 감시 구문이 심어진 최종 안정화 엔진을 통해 발송되었습니다.</p>
     </body>
     </html>"""
 
