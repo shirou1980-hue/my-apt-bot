@@ -1,111 +1,111 @@
 import os
 import smtplib
-import time
+import json
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
 
+# ── 환경변수 ──────────────────────────────────────────────
 SMTP_SERVER      = "smtp.gmail.com"
 SMTP_PORT        = 587
 SENDER_EMAIL     = "shirou1980@gmail.com"
 SENDER_PASSWORD  = os.environ.get("GMAIL_PASSWORD")
 RECEIVER_EMAIL   = os.environ.get("RECEIVER_EMAIL")
+PUBLIC_API_KEY   = os.environ.get("PUBLIC_DATA_API_KEY", "")
 
-def get_subscription_data():
-    today = datetime.now()
-    today_day = str(today.day)
-    print(f"📅 데이터 수집 기준 날짜 (한국 시간): {today.strftime('%Y-%m-%d')}")
-
-    today_info = []
-
-    with sync_playwright() as p:
-        try:
-            print("[인프라 가동] Playwright 가상 대형 PC 브라우저 런칭...")
-            browser = p.chromium.launch(headless=True)
-            # 대형 화면 해상도를 주입하여 반응형 모바일 모드를 강제 분쇄합니다.
-            context = browser.new_context(viewport={"width": 1920, "height": 1080})
-            page = context.new_page()
-            
-            print("-> 청약홈 메인 달력 보안 관문 진입...")
-            page.goto("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do", timeout=60000)
-            
-            # [1차 징검다리] sub_iframe 프레임 뼈대 장착 대기
-            page.wait_for_selector("#sub_iframe", timeout=15000)
-            main_frame = page.frame(name="sub_iframe")
-            
-            if main_frame:
-                print("-> 1차 sub_iframe 진입 성공. 내부 달력 렌더링 감시단 가동...")
-                # 2차 내부 달력 프레임 뼈대가 완전히 구성될 때까지 추적 대기
-                main_frame.wait_for_selector("#iframe_calendar", timeout=15000)
-                
-                calendar_frame = None
-                for f in main_frame.child_frames:
-                    if f.name == "iframe_calendar":
-                        calendar_frame = f
-                        break
-                
-                if calendar_frame:
-                    # 🔥 [진짜 최종 근본 해결책: 물리 텍스트 로딩 정밀 감시]
-                    # 단순히 sleep으로 노는 것이 아니라, 달력 칸 내부(.calendar_body td)에 아파트 텍스트 정보가 
-                    # 한 줄이라도 브라우저 메모리에 완벽하게 그려져서 렌더링될 때까지 물리적으로 대기합니다.
-                    print("-> [정밀 동기화] 달력 내부에 진짜 청약 데이터 글자가 인쇄될 때까지 대기 감시 중...")
-                    try:
-                        calendar_frame.wait_for_selector(".calendar_body td a, .calendar_body font", timeout=20000)
-                        print("-> [감시 성공] 청약홈 진짜 알맹이 데이터 렌더링 완벽 포착!")
-                    except:
-                        print("⚠️ 정밀 감시 타임아웃: 안전 수집을 위해 추가 시간 정지(5초)를 부여합니다.")
-                        time.sleep(5)
-                        
-                    html_content = calendar_frame.content()
-                else:
-                    html_content = page.content()
-            else:
-                html_content = page.content()
-
-            print("-> 달력 소스 내부 텍스트 복사 및 필터링 오려내기 시작...")
-            soup = BeautifulSoup(html_content, "html.parser")
-            cells = soup.select(".calendar_body td, table td")
-            print(f"-> 검색된 달력 그리드 칸 수: {len(cells)}개")
-            
-            matched_cell = None
-            for cell in cells:
-                cell_text = cell.get_text(separator=" ", strip=True)
-                lines = [l.strip() for l in cell_text.split() if l.strip()]
-                
-                if lines and lines[0] == today_day:
-                    matched_cell = cell
-                    break
-                    
-            if matched_cell:
-                print(f"-> [성공] 오늘({today_day}일) 자 칸 구역 확보 완료.")
-                raw_lines = [line.strip() for line in matched_cell.get_text(separator="\n").split("\n") if line.strip()]
-                
-                for line in raw_lines:
-                    if line != today_day and len(line) > 1:
-                        clean_text = " ".join(line.split())
-                        today_info.append(clean_text)
-            else:
-                print("⚠️ 달력 내부에서 오늘 날짜 구역 파싱을 전면 놓쳤습니다.")
-
-        except Exception as e:
-            print(f"❌ 매크로 제어 엔진 작동 중 예외 발생: {e}")
-            return [f"청약홈 매크로 제어 예외 발생: {e}"]
-        finally:
-            browser.close()
-
-    today_info = sorted(list(set(today_info)))
-    print(f"📋 최종 빌드된 메일 발송 데이터 목록: {today_info}")
-    
-    if not today_info:
-        today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
+def fetch_api_data(url: str) -> list:
+    """공공데이터 API 서버로부터 데이터를 안전하게 수신하는 공통 함수"""
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        items_data = data.get("response", {}).get("body", {}).get("items", {})
         
-    return today_info
+        if not items_data or items_data == "" or isinstance(items_data, str):
+            return []
+            
+        items = items_data.get("item", [])
+        if isinstance(items, dict):
+            return [items]
+        return items
+    except Exception as e:
+        print(f"⚠️ 특정 API 노크 실패: {e}")
+        return []
 
-def send_email(contents):
+def get_subscription_data() -> list:
+    today_str = datetime.now().strftime("%Y%m%d")
+    today_int = int(today_str)
+    print(f"📅 데이터 매칭 기준 날짜: {datetime.now().strftime('%Y-%m-%d')}")
+
+    if not PUBLIC_API_KEY:
+        return ["⚠️ PUBLIC_DATA_API_KEY가 GitHub Secrets에 설정되지 않았습니다."]
+
+    results = []
+
+    # 🔗 1번 파이프라인: 일반 공급 아파트 마스터 API
+    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=500&pageNo=1&_type=json"
+    
+    # 🔗 2번 파이프라인: 무순위 / 잔여세대 / 취소후재공급 마스터 API (★누락 해결의 핵심)
+    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=500&pageNo=1&_type=json"
+
+    print("[API] 1번 일반 분양 및 2번 무순위 마스터 데이터 동시 다운로드 중...")
+    apt_items = fetch_api_data(url_apt)
+    remndr_items = fetch_api_data(url_remndr)
+    
+    print(f"-> 수집 원본 확보 (일반분양: {len(apt_items)}건 / 무순위: {len(remndr_items)}건)")
+
+    # 1) 일반 아파트 마스터 분석 및 오늘 자 스케줄 필터링
+    for item in apt_items:
+        name = item.get("houseNm", "").strip()
+        area = item.get("hssplyAdres", "").strip()
+        
+        rcept_bgnde = item.get("rceptBgnde", "").replace("-", "").strip()
+        rcept_endde = item.get("rceptEndde", "").replace("-", "").strip()
+        spt_bgnde   = item.get("sptPblancHseRceptBgnde", "").replace("-", "").strip()
+        spt_endde   = item.get("sptPblancHseRceptEndde", "").replace("-", "").strip()
+        przwin_de   = item.get("przwinPblancDe", "").replace("-", "").strip()
+        cntrct_bgnde = item.get("cntrctBgnde", "").replace("-", "").strip()
+        cntrct_endde = item.get("cntrctEndde", "").replace("-", "").strip()
+
+        tags = []
+        if rcept_bgnde and rcept_endde and int(rcept_bgnde) <= today_int <= int(rcept_endde): tags.append("일반접수")
+        if spt_bgnde and spt_endde and int(spt_bgnde) <= today_int <= int(spt_endde): tags.append("특공접수")
+        if przwin_de and int(przwin_de) == today_int: tags.append("당첨자발표")
+        if cntrct_bgnde and cntrct_endde and int(cntrct_bgnde) <= today_int <= int(cntrct_endde): tags.append("계약일")
+
+        if tags:
+            results.append(f"[{'/'.join(tags)}] {name} ({area})")
+
+    # 2) 무순위 / 잔여세대 마스터 분석 및 오늘 자 스케줄 필터링 (★추가 완료)
+    for item in remndr_items:
+        name = item.get("houseNm", "").strip()
+        area = item.get("hssplyAdres", "").strip()
+        
+        # 무순위 세대의 고유 변수 매칭
+        sub_bgnde = item.get("subscrptRceptBgnde", "").replace("-", "").strip() # 무순위 접수 시작
+        sub_endde = item.get("subscrptRceptEndde", "").replace("-", "").strip() # 무순위 접수 종료
+        przwin_de = item.get("przwinPblancDe", "").replace("-", "").strip()      # 발표일
+        cntrct_bgnde = item.get("cntrctBgnde", "").replace("-", "").strip()     # 계약 시작
+        cntrct_endde = item.get("cntrctEndde", "").replace("-", "").strip()     # 계약 종료
+
+        tags = []
+        if sub_bgnde and sub_endde and int(sub_bgnde) <= today_int <= int(sub_endde): tags.append("무순위접수")
+        if przwin_de and int(przwin_de) == today_int: tags.append("당첨자발표")
+        if cntrct_bgnde and cntrct_endde and int(cntrct_bgnde) <= today_int <= int(cntrct_endde): tags.append("계약일")
+
+        if tags:
+            results.append(f"[{'/'.join(tags)}] {name} ({area})")
+
+    results = sorted(list(set(results)))
+    print(f"🎯 [정밀 필터링 완료] 오늘 자 일치 공급 정보 총 {len(results)}건 매칭 성공.")
+    return results
+
+def send_email(contents: list):
     today_str = datetime.now().strftime("%Y-%m-%d")
-    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락"]
+    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "⚠️"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
     if no_data:
@@ -124,11 +124,11 @@ def send_email(contents):
     <html>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;">
       <h2 style="color:#0056b3;border-bottom:2px solid #0056b3;padding-bottom:10px;margin-bottom:20px;">🏠 청약Home 오늘의 아파트 공급 정보</h2>
-      <p>안녕하세요. <strong>{today_str}</strong> 기준 오늘 달력에 등록된 전체 일정 목록입니다.</p>
+      <p>안녕하세요. <strong>{today_str}</strong> 기준 오늘 진행 중인 전체 청약/발표/계약 일정 목록입니다.</p>
       <div style="background-color:#f8f9fa;padding:20px;border-radius:5px;border:1px solid #e9ecef;margin:20px 0;">
         {body_html}
       </div>
-      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 인프라 타이밍 레이더 감시 구문이 심어진 최종 안정화 엔진을 통해 발송되었습니다.</p>
+      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 크롤러 우회 차단 위험이 없는 공공데이터 2중 API 동기화를 통해 완벽하게 발송되었습니다.</p>
     </body>
     </html>"""
 
