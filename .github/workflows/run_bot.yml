@@ -3,7 +3,7 @@ name: Applyhome Automation Bot
 on:
   schedule:
     - cron: '30 23 * * *' # 매일 아침 한국시간 08:30 자동 가동
-  workflow_dispatch: # 수동 실행 버튼
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,15 +18,9 @@ jobs:
       with:
         python-version: '3.10'
 
-    # 🔥 가장 안전하게 빌드 성공을 보장하는 핵심 환경 세팅 구문입니다.
-    - name: 필수 의존성 라이브러리 및 Playwright 크롬 엔진 설치
-      run: |
-        python -m pip install --upgrade pip
-        pip install beautifulsoup4 playwright
-        playwright install chromium
-
-    - name: 청약 자동화 매크로 프로그램 가동
+    - name: 청약 자동화 프로그램 가동
       env:
         GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        PUBLIC_DATA_API_KEY: ${{ secrets.PUBLIC_DATA_API_KEY }}
       run: python apt_bot.py
