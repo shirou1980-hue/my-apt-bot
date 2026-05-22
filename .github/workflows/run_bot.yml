@@ -3,7 +3,7 @@ name: Applyhome Automation Bot
 on:
   schedule:
     - cron: '30 23 * * *' # 매일 아침 한국시간 08:30 자동 가동
-  workflow_dispatch: # 수동 실행 버튼
+  workflow_dispatch: # 수동 가동 버튼
 
 jobs:
   build:
@@ -18,11 +18,12 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: 크롤러 전용 의존성 라이브러리 및 크롬 설치
+    # 🔥 브라우저를 전혀 안 쓰므로 아름답고 깔끔하게 딱 beautifulsoup4 하나만 설치합니다.
+    - name: 필수 경량 파서 라이브러리 설치
       run: |
-        pip install selenium beautifulsoup4
+        pip install beautifulsoup4
 
-    - name: 청약 자동화 매크로 프로그램 가동
+    - name: 청약 자동화 프로그램 가동
       env:
         GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
