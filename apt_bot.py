@@ -1,104 +1,111 @@
 import os
 import smtplib
 import json
+from datetime import datetime
 import urllib.request
 import urllib.parse
-from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+# ── 환경변수 ──────────────────────────────────────────────
 SMTP_SERVER      = "smtp.gmail.com"
 SMTP_PORT        = 587
 SENDER_EMAIL     = "shirou1980@gmail.com"
 SENDER_PASSWORD  = os.environ.get("GMAIL_PASSWORD")
 RECEIVER_EMAIL   = os.environ.get("RECEIVER_EMAIL")
+PUBLIC_API_KEY   = os.environ.get("PUBLIC_DATA_API_KEY", "")  # 공공데이터포털 키
 
-def get_subscription_data():
+def get_subscription_data() -> list:
     today = datetime.now()
     today_str = today.strftime("%Y%m%d") # 예: '20260522'
-    today_day = str(today.day)
-    print(f"📅 데이터 수집 기준 날짜 (한국 시간): {today.strftime('%Y-%m-%d')}")
+    print(f"📅 수집 기준 날짜: {today.strftime('%Y-%m-%d')}")
 
-    # 🔥 [근본적 해결책] 청약홈 서버가 달력 데이터를 불러오는 실시간 통신 주소를 직접 타격합니다.
-    url = "https://www.applyhome.co.kr/ai/aia/selectAptCalenderList.do"
-    
-    # 청약홈 서버가 요구하는 정밀 보안 헤더값 세팅
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Referer": "https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do"
-    }
-    
-    # 현재 날짜 기준 한 달 치 데이터를 통째로 요청하는 파라미터 조립
-    req_data = urllib.parse.urlencode({
-        "searchMonth": today.strftime("%Y%m") # '202605'
-    }).encode("utf-8")
+    if not PUBLIC_API_KEY:
+        print("⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다.")
+        return ["공공데이터 API 키가 누락되었습니다. GitHub Secrets를 확인해주세요."]
 
-    today_info = []
+    # 유효한 전국의 아파트 청약 공급 마스터 데이터를 대량 요청합니다.
+    base_url = "https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList"
+    params = urllib.parse.urlencode({
+        "serviceKey" : PUBLIC_API_KEY,
+        "numOfRows"        : "1000", # 누락 방지를 위해 넉넉히 설정
+        "pageNo"           : "1",
+        "_type"            : "json",
+    })
+    url = f"{base_url}?{params}"
 
     try:
-        print("[통신망 가로채기] 청약홈 핵심 데이터베이스 서버 요청 전송...")
-        req = urllib.request.Request(url, data=req_data, headers=headers, method="POST")
-        
-        with urllib.request.urlopen(req, timeout=15) as response:
-            res_body = response.read().decode("utf-8")
+        print("[API] 공공데이터포털 청약 마스터 데이터 수집 시작...")
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+
+        body_obj = data.get("response", {}).get("body", {})
+        items_data = body_obj.get("items", {})
+
+        if not items_data or isinstance(items_data, str) or items_data == "":
+            print("[API] 현재 데이터포털에 등록된 유효 청약 정보가 없습니다.")
+            return ["오늘 예정된 아파트 청약 공급 일정이 없습니다."]
+
+        items = items_data.get("item", [])
+        if isinstance(items, dict):
+            items = [items]
+
+        results = []
+        today_int = int(today_str)
+        print(f"[API] 총 {len(items)}건의 아파트 데이터 중 오늘 자 [접수/발표/계약] 일정 정밀 매칭 시작...")
+
+        for item in items:
+            name = item.get("houseNm", "").strip()
+            area = item.get("hssplyAdres", "").strip()
             
-        # 서버에서 받아온 순수 JSON 데이터 해석
-        json_data = json.loads(res_body)
-        cal_list = json_data.get("calList", [])
-        
-        print(f"-> 이번 달 등록된 전체 공급 일정 총 {len(cal_list)}건 확보.")
-        
-        for item in cal_list:
-            # 아파트 정보 구조 분해
-            house_nm = item.get("houseNm", "").strip()      # 아파트명
-            house_secd_nm = item.get("houseSecdNm", "")    # 공급 유형 (일반, 무순위 등)
+            # 1. 일반공급 및 특별공급 접수 일정 추출 (하이픈 제거)
+            rcept_bgnde = item.get("rceptBgnde", "").replace("-", "").strip()
+            rcept_endde = item.get("rceptEndde", "").replace("-", "").strip()
+            spt_bgnde = item.get("sptPblancHseRceptBgnde", "").replace("-", "").strip()
+            spt_endde = item.get("sptPblancHseRceptEndde", "").replace("-", "").strip()
             
-            # 각 단지별 고유한 스케줄 날짜들 파싱 (하이픈 제거)
-            rcept_bgnde = str(item.get("rceptBgnde", "")).replace("-", "").strip() # 접수시작
-            rcept_endde = str(item.get("rceptEndde", "")).replace("-", "").strip() # 접수종료
-            spt_bgnde   = str(item.get("sptPblancHseRceptBgnde", "")).replace("-", "").strip() # 특공시작
-            spt_endde   = str(item.get("sptPblancHseRceptEndde", "")).replace("-", "").strip() # 특공종료
-            przwin_pblanc_de = str(item.get("przwinPblancDe", "")).replace("-", "").strip() # 당첨자 발표일
-            cntrct_bgnde = str(item.get("cntrctBgnde", "")).replace("-", "").strip() # 계약시작일
-            cntrct_endde = str(item.get("cntrctEndde", "")).replace("-", "").strip() # 계약종료일
+            # 🔥 [핵심 추가] 달력 누락의 주범이었던 당첨자 발표일 및 계약 일정 변수 정밀 추적
+            przwin_pblanc_de = item.get("przwinPblancDe", "").replace("-", "").strip()
+            cntrct_bgnde = item.get("cntrctBgnde", "").replace("-", "").strip()
+            cntrct_endde = item.get("cntrctEndde", "").replace("-", "").strip()
 
             active_schedules = []
 
-            # 1. 일반공급 접수 기간 체크
-            if rcept_bgnde and rcept_endde and rcept_bgnde <= today_str <= rcept_endde:
-                active_schedules.append("청약접수")
-            # 2. 특별공급 접수 기간 체크
-            if spt_bgnde and spt_endde and spt_bgnde <= today_str <= spt_endde:
+            # 1) 오늘 날짜가 일반 청약 접수 기간에 걸쳐 있는지 확인
+            if rcept_bgnde and rcept_endde and int(rcept_bgnde) <= today_int <= int(rcept_endde):
+                active_schedules.append("일반접수")
+            
+            # 2) 오늘 날짜가 특별공급 접수 기간에 걸쳐 있는지 확인
+            if spt_bgnde and spt_endde and int(spt_bgnde) <= today_int <= int(spt_endde):
                 active_schedules.append("특공접수")
-            # 3. 당첨자 발표일 체크
-            if przwin_pblanc_de == today_str:
+                
+            # 3) 오늘이 당첨자 발표일인지 확인
+            if przwin_pblanc_de and int(przwin_pblanc_de) == today_int:
                 active_schedules.append("당첨자발표")
-            # 4. 계약 기간 체크
-            if cntrct_bgnde and cntrct_endde and cntrct_bgnde <= today_str <= cntrct_endde:
+                
+            # 4) 오늘 날짜가 계약 진행 기간에 걸쳐 있는지 확인
+            if cntrct_bgnde and cntrct_endde and int(cntrct_bgnde) <= today_int <= int(cntrct_endde):
                 active_schedules.append("계약일")
 
-            # 오늘 날짜에 걸려 있는 스케줄이 하나라도 있다면 리스트에 추가
+            # 네 가지 조건 중 오늘 하나라도 해당한다면 리스트에 적재
             if active_schedules:
                 schedule_tag = "/".join(active_schedules)
-                today_info.append(f"[{schedule_tag}] {house_nm} ({house_secd_nm})")
+                results.append(f"[{schedule_tag}] {name} ({area})")
 
-        # 중복 제거 및 정렬
-        today_info = sorted(list(set(today_info)))
-        print(f"🎯 [필터링 성공] 오늘 스케줄에 걸려있는 진짜 단지 총 {len(today_info)}건 추출 완료.")
+        # 중복 데이터 제거 및 정렬
+        results = sorted(list(set(results)))
+        print(f"🎯 [매칭 완료] 오늘 일정에 해당하는 아파트 총 {len(results)}건 선별 성공.")
+        return results
 
     except Exception as e:
-        print(f"❌ 데이터 서버 직격 통신 중 치명적 오류 발생: {e}")
-        return [f"청약홈 서버 통신 실패 (오류 코드: {e})"]
+        print(f"❌ API 데이터 마스터 분석 중 오류 발생: {e}")
+        return [f"공공데이터 수집 중 예외 발생: {e}"]
 
-    if not today_info:
-        today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
-        
-    return today_info
-
-def send_email(contents):
+def send_email(contents: list):
     today_str = datetime.now().strftime("%Y-%m-%d")
-    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락"]
+    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "예외"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
     if no_data:
@@ -117,11 +124,11 @@ def send_email(contents):
     <html>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;">
       <h2 style="color:#0056b3;border-bottom:2px solid #0056b3;padding-bottom:10px;margin-bottom:20px;">🏠 청약Home 오늘의 아파트 공급 정보</h2>
-      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 달력에 등록된 전체 청약/발표/계약 일정 목록입니다.</p>
+      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 진행 중인 전체 청약/발표/계약 일정 목록입니다.</p>
       <div style="background-color:#f8f9fa;padding:20px;border-radius:5px;border:1px solid #e9ecef;margin:20px 0;">
         """ + body_html + """
       </div>
-      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 크롤러 브라우저 없이 청약홈 정밀 데이터 통신을 통해 신속하게 발송되었습니다.</p>
+      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 안정적인 국가 공공데이터포털 API 연계를 통해 발송되었습니다.</p>
     </body>
     </html>"""
 
