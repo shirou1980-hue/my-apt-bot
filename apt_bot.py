@@ -1,15 +1,11 @@
 import os
 import smtplib
-import time
+import json
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 
 SMTP_SERVER      = "smtp.gmail.com"
 SMTP_PORT        = 587
@@ -18,80 +14,91 @@ SENDER_PASSWORD  = os.environ.get("GMAIL_PASSWORD")
 RECEIVER_EMAIL   = os.environ.get("RECEIVER_EMAIL")
 
 def get_subscription_data():
-    options = Options()
-    options.add_argument("--headless") 
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    
-    # 🔥 [진짜 핵심 치트키] 가상 브라우저의 창 크기를 일반 대형 PC 모니터 화면 크기로 박아버립니다.
-    # 이렇게 해야 청약홈 달력이 모바일 모드로 쪼그라들지 않고, 아파트 이름들이 화면에 다 그려집니다.
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--start-maximized")
-    
-    driver = webdriver.Chrome(options=options)
-    today_info = []
-    
-    try:
-        print("1. 청약홈 달력 주소 대형 모니터 모드로 접속...")
-        driver.get("https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do")
-        time.sleep(8)
-        
-        # [1차 진입] sub_iframe
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "sub_iframe")))
-        driver.switch_to.frame("sub_iframe")
-        
-        # [2차 진입] iframe_calendar
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "iframe_calendar")))
-        driver.switch_to.frame("iframe_calendar")
-        time.sleep(3)
-        
-        today_day = str(datetime.now().day)
-        print(f"2. 전체 화면 렌더링 검증 완료. 오늘 날짜({today_day}일) 칸 정밀 크롭 시작...")
-        
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        cells = soup.select(".calendar_body td")
-        
-        matched_cell = None
-        for cell in cells:
-            a_tag = cell.select_one("a")
-            if a_tag:
-                cell_day = a_tag.text.strip()
-                if cell_day == today_day:
-                    matched_cell = cell
-                    break
-        
-        if matched_cell:
-            print("-> [성공] 대형 달력 내부에서 오늘 날짜 구역을 확보했습니다.")
-            # 텍스트 라인 단위로 쪼개서 불필요한 공백을 지우고 알맹이만 선별합니다.
-            lines = [line.strip() for line in matched_cell.text.split("\n") if line.strip()]
-            
-            for line in lines:
-                # 오늘 날짜 숫자 자체이거나, 한 글자짜리 노이즈는 제외합니다.
-                if line != today_day and len(line) > 1:
-                    # 완벽하게 정제된 아파트 정보 수집
-                    clean_text = " ".join(line.split())
-                    today_info.append(clean_text)
-                    
-            print(f"-> 오늘 자 일정 총 {len(today_info)}건 획득 성공.")
-        else:
-            print("⚠️ 반응형 해상도 우회 실패: 달력 내부에서 오늘 날짜 칸을 식별하지 못했습니다.")
+    today = datetime.now()
+    today_str = today.strftime("%Y%m%d") # 예: '20260522'
+    today_day = str(today.day)
+    print(f"📅 데이터 수집 기준 날짜 (한국 시간): {today.strftime('%Y-%m-%d')}")
 
-        if not today_info:
-            today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
-            
-        return today_info
+    # 🔥 [근본적 해결책] 청약홈 서버가 달력 데이터를 불러오는 실시간 통신 주소를 직접 타격합니다.
+    url = "https://www.applyhome.co.kr/ai/aia/selectAptCalenderList.do"
+    
+    # 청약홈 서버가 요구하는 정밀 보안 헤더값 세팅
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Referer": "https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do"
+    }
+    
+    # 현재 날짜 기준 한 달 치 데이터를 통째로 요청하는 파라미터 조립
+    req_data = urllib.parse.urlencode({
+        "searchMonth": today.strftime("%Y%m") # '202605'
+    }).encode("utf-8")
+
+    today_info = []
+
+    try:
+        print("[통신망 가로채기] 청약홈 핵심 데이터베이스 서버 요청 전송...")
+        req = urllib.request.Request(url, data=req_data, headers=headers, method="POST")
         
+        with urllib.request.urlopen(req, timeout=15) as response:
+            res_body = response.read().decode("utf-8")
+            
+        # 서버에서 받아온 순수 JSON 데이터 해석
+        json_data = json.loads(res_body)
+        cal_list = json_data.get("calList", [])
+        
+        print(f"-> 이번 달 등록된 전체 공급 일정 총 {len(cal_list)}건 확보.")
+        
+        for item in cal_list:
+            # 아파트 정보 구조 분해
+            house_nm = item.get("houseNm", "").strip()      # 아파트명
+            house_secd_nm = item.get("houseSecdNm", "")    # 공급 유형 (일반, 무순위 등)
+            
+            # 각 단지별 고유한 스케줄 날짜들 파싱 (하이픈 제거)
+            rcept_bgnde = str(item.get("rceptBgnde", "")).replace("-", "").strip() # 접수시작
+            rcept_endde = str(item.get("rceptEndde", "")).replace("-", "").strip() # 접수종료
+            spt_bgnde   = str(item.get("sptPblancHseRceptBgnde", "")).replace("-", "").strip() # 특공시작
+            spt_endde   = str(item.get("sptPblancHseRceptEndde", "")).replace("-", "").strip() # 특공종료
+            przwin_pblanc_de = str(item.get("przwinPblancDe", "")).replace("-", "").strip() # 당첨자 발표일
+            cntrct_bgnde = str(item.get("cntrctBgnde", "")).replace("-", "").strip() # 계약시작일
+            cntrct_endde = str(item.get("cntrctEndde", "")).replace("-", "").strip() # 계약종료일
+
+            active_schedules = []
+
+            # 1. 일반공급 접수 기간 체크
+            if rcept_bgnde and rcept_endde and rcept_bgnde <= today_str <= rcept_endde:
+                active_schedules.append("청약접수")
+            # 2. 특별공급 접수 기간 체크
+            if spt_bgnde and spt_endde and spt_bgnde <= today_str <= spt_endde:
+                active_schedules.append("특공접수")
+            # 3. 당첨자 발표일 체크
+            if przwin_pblanc_de == today_str:
+                active_schedules.append("당첨자발표")
+            # 4. 계약 기간 체크
+            if cntrct_bgnde and cntrct_endde and cntrct_bgnde <= today_str <= cntrct_endde:
+                active_schedules.append("계약일")
+
+            # 오늘 날짜에 걸려 있는 스케줄이 하나라도 있다면 리스트에 추가
+            if active_schedules:
+                schedule_tag = "/".join(active_schedules)
+                today_info.append(f"[{schedule_tag}] {house_nm} ({house_secd_nm})")
+
+        # 중복 제거 및 정렬
+        today_info = sorted(list(set(today_info)))
+        print(f"🎯 [필터링 성공] 오늘 스케줄에 걸려있는 진짜 단지 총 {len(today_info)}건 추출 완료.")
+
     except Exception as e:
-        print(f"❌ 크롤링 제어 중 오류 발생: {e}")
-        return None
-    finally:
-        driver.quit()
+        print(f"❌ 데이터 서버 직격 통신 중 치명적 오류 발생: {e}")
+        return [f"청약홈 서버 통신 실패 (오류 코드: {e})"]
+
+    if not today_info:
+        today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
+        
+    return today_info
 
 def send_email(contents):
     today_str = datetime.now().strftime("%Y-%m-%d")
-    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "예외"]
+    no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
     if no_data:
@@ -110,11 +117,11 @@ def send_email(contents):
     <html>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;">
       <h2 style="color:#0056b3;border-bottom:2px solid #0056b3;padding-bottom:10px;margin-bottom:20px;">🏠 청약Home 오늘의 아파트 공급 정보</h2>
-      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 달력에 등록된 청약 일정 목록입니다.</p>
+      <p>안녕하세요. <strong>""" + today_str + """</strong> 기준 오늘 달력에 등록된 전체 청약/발표/계약 일정 목록입니다.</p>
       <div style="background-color:#f8f9fa;padding:20px;border-radius:5px;border:1px solid #e9ecef;margin:20px 0;">
         """ + body_html + """
       </div>
-      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 GitHub Actions 자동화 서버를 통해 발송되었습니다.</p>
+      <p style="font-size:12px;color:#888;margin-top:30px;">본 메일은 크롤러 브라우저 없이 청약홈 정밀 데이터 통신을 통해 신속하게 발송되었습니다.</p>
     </body>
     </html>"""
 
