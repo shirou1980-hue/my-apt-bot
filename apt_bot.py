@@ -1,273 +1,236 @@
-import os
+"""
+청약 알림 스크립트 - 최종본 (Playwright)
+- 오늘 날짜 달력 텍스트 파싱 → 아파트 목록 이메일
+- 달력 스크린샷 첨부
+- GitHub Actions 환경에서 안정적으로 동작
+"""
+
 import smtplib
-import json
-import urllib.request
-import urllib.parse
-from datetime import datetime, timedelta
+import os
+import sys
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+from pathlib import Path
 
-# ── 환경변수 ──────────────────────────────────────────────
+# ── 환경변수 (GitHub Secrets) ─────────────────────────────
 SMTP_SERVER     = "smtp.gmail.com"
 SMTP_PORT       = 587
-SENDER_EMAIL    = "shirou1980@gmail.com"
-SENDER_PASSWORD = os.environ.get("GMAIL_PASSWORD")
-RECEIVER_EMAIL  = os.environ.get("RECEIVER_EMAIL")
-RAW_API_KEY     = os.environ.get("PUBLIC_DATA_API_KEY", "")
+SENDER_EMAIL    = os.environ["GMAIL_ADDRESS"]
+SENDER_PASSWORD = os.environ["GMAIL_APP_PW"]
+RECEIVER_EMAIL  = os.environ["RECEIVER_EMAIL"]
 
-# ★ 핵심: 공공데이터 키는 포털에서 발급한 "인코딩된 키"를 그대로 써야 한다.
-#   urllib이 URL을 조합할 때 serviceKey를 또 인코딩하면 이중 인코딩 → 키 깨짐.
-#   해결책: URL 문자열을 직접 조립(f-string)하고, 키는 미리 디코딩 후 재인코딩하여 고정.
-def prepare_key(raw: str) -> str:
-    """포털 발급 키(인코딩 여부 무관)를 URL-safe 단일 인코딩으로 정규화"""
-    try:
-        decoded = urllib.parse.unquote(raw)   # 이미 인코딩된 키 → 디코딩
-        return urllib.parse.quote(decoded, safe='')  # 재인코딩(단일)
-    except Exception:
-        return raw
+TARGET_URL      = "https://www.applyhome.co.kr/ai/aia/selectAptCalenderView.do"
+SCREENSHOT_PATH = Path("/tmp/apt_calendar.png")
 
 
-def fetch_raw(url: str, label: str) -> dict:
-    """URL을 직접 호출 후 JSON dict 반환. 실패 시 {} 반환"""
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 AptBot/3.0"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            raw = r.read().decode("utf-8")
-    except Exception as e:
-        print(f"  [{label}] 연결 실패: {e}")
-        return {}
-
-    # XML 에러 응답 감지 (API 키 오류 시 XML로 내려옴)
-    stripped = raw.strip()
-    if stripped.startswith("<"):
-        print(f"  [{label}] ⚠️ XML 에러 응답 수신 → API 키 문제 가능성")
-        print(f"  내용: {stripped[:300]}")
-        return {}
-
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"  [{label}] JSON 파싱 실패: {e}")
-        print(f"  원문(200자): {raw[:200]}")
-        return {}
-
-
-def call_api(url: str, label: str) -> list:
+# ── 달력 파싱 + 스크린샷 ──────────────────────────────────
+def scrape_calendar() -> tuple[list[str], bool]:
     """
-    공공데이터 API를 호출하여 item 리스트 반환.
-    ★ 핵심: API는 '모집공고일(pblancBgnde ~ pblancEndde)' 기준으로만 데이터를 돌려줌.
-       날짜 범위를 넓게(30~90일) 잡아서 전체를 내려받고, 파이썬 측에서 오늘 날짜 필터링.
+    반환값: (오늘 일정 텍스트 리스트, 스크린샷 성공 여부)
     """
-    data = fetch_raw(url, label)
-    if not data:
-        return []
+    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-    resp   = data.get("response", {})
-    header = resp.get("header", {})
-    code   = header.get("resultCode", "")
-    msg    = header.get("resultMsg", "")
+    today     = datetime.now()
+    today_day = str(today.day)
+    today_info: list[str] = []
+    screenshot_ok = False
 
-    if code != "00":
-        print(f"  [{label}] API 오류 resultCode={code} / {msg}")
-        return []
+    print(f"[{today:%H:%M:%S}] 청약홈 접속 중... (오늘: {today.month}월 {today_day}일)")
 
-    body        = resp.get("body", {})
-    total_count = body.get("totalCount", 0)
-    print(f"  [{label}] totalCount={total_count}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ]
+        )
+        context = browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        )
+        page = context.new_page()
 
-    if total_count == 0:
-        return []
+        print("  페이지 로딩...")
+        page.goto(TARGET_URL, wait_until="networkidle", timeout=40000)
+        page.wait_for_timeout(5000)
 
-    items_wrap = body.get("items")
-    if not items_wrap or items_wrap == "":
-        return []
+        # ── iframe 체인 진입 ──────────────────────────────
+        # 청약홈은 메인 → sub_iframe → iframe_calendar 2중 구조
+        try:
+            cal = (
+                page
+                .frame_locator("#sub_iframe")
+                .frame_locator("#iframe_calendar")
+            )
 
-    items = items_wrap.get("item", [])
-    if isinstance(items, dict):   # 단건 조회 시 dict로 내려옴
-        items = [items]
-    return items if isinstance(items, list) else []
+            # 달력 테이블 로딩 대기
+            cal.locator(".calendar_body").wait_for(timeout=20000)
+            print("  달력 iframe 진입 성공")
 
+            # ── 스크린샷 ─────────────────────────────────
+            try:
+                cal_wrap = cal.locator(".calendar_wrap").first
+                cal_wrap.screenshot(path=str(SCREENSHOT_PATH))
+                screenshot_ok = True
+                print("  달력 영역 스크린샷 완료")
+            except Exception as e:
+                print(f"  달력 영역 스크린샷 실패, 전체 화면으로 대체: {e}")
+                page.screenshot(path=str(SCREENSHOT_PATH))
+                screenshot_ok = True
 
-def sd(val) -> str:
-    """날짜값 → YYYYMMDD 문자열. 실패 시 ''"""
-    if not val:
-        return ""
-    return str(val).replace("-", "").strip()
+            # ── 오늘 날짜 칸 파싱 ────────────────────────
+            # 달력의 모든 td를 순회하여 오늘 날짜 칸만 추출
+            cells = cal.locator(".calendar_body td")
+            count = cells.count()
+            print(f"  달력 칸 수: {count}")
 
-
-def in_range(s: str, e: str, t: int) -> bool:
-    """t가 [s, e] 범위 내인지 (문자열 → int 변환, 실패 시 False)"""
-    try:
-        return bool(s) and bool(e) and int(s) <= t <= int(e)
-    except (ValueError, TypeError):
-        return False
-
-
-def exact(d: str, t: int) -> bool:
-    try:
-        return bool(d) and int(d) == t
-    except (ValueError, TypeError):
-        return False
-
-
-def get_subscription_data() -> dict:
-    today      = datetime.now()
-    today_int  = int(today.strftime("%Y%m%d"))
-    # 공고일 범위: 60일 전 ~ 60일 후 (오늘 기준 진행 중인 청약을 모두 포괄)
-    from_dt    = (today - timedelta(days=60)).strftime("%Y%m%d")
-    to_dt      = (today + timedelta(days=60)).strftime("%Y%m%d")
-    week_later = int((today + timedelta(days=7)).strftime("%Y%m%d"))
-
-    print(f"📅 기준일: {today.strftime('%Y-%m-%d')} | 조회범위: {from_dt} ~ {to_dt}")
-
-    if not RAW_API_KEY:
-        return {"today": [], "upcoming": [], "errors": ["⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다."]}
-
-    KEY = prepare_key(RAW_API_KEY)
-
-    # ★★★ 핵심 수정: pblancBgnde / pblancEndde 파라미터 추가 ★★★
-    # 이 API는 날짜 범위를 반드시 줘야 데이터를 돌려줌.
-    # 날짜 없이 호출 → totalCount=0 (빈 응답) 반환하는 구조.
-    common_params = f"numOfRows=1000&pageNo=1&_type=json&pblancBgnde={from_dt}&pblancEndde={to_dt}"
-
-    endpoints = {
-        "일반분양": (
-            f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/"
-            f"getAPTLttotPblancMstList?serviceKey={KEY}&{common_params}",
-            # 날짜 필드 매핑 (필드명: (시작, 종료) 또는 단일)
-            {
-                "특공접수":   ("sptPblancHseRceptBgnde", "sptPblancHseRceptEndde"),
-                "일반접수":   ("rceptBgnde", "rceptEndde"),
-                "계약":       ("cntrctBgnde", "cntrctEndde"),
-            },
-            "przwinPblancDe",   # 당첨자 발표일
-        ),
-        "무순위/잔여": (
-            f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/"
-            f"getRemndrMstList?serviceKey={KEY}&{common_params}",
-            {
-                "무순위접수": ("subscrptRceptBgnde", "subscrptRceptEndde"),
-                "계약":       ("cntrctBgnde", "cntrctEndde"),
-            },
-            "przwinPblancDe",
-        ),
-    }
-
-    today_list    = []
-    upcoming_list = []
-
-    for label, (url, date_fields, przwin_field) in endpoints.items():
-        print(f"\n🔗 [{label}] 호출 중...")
-        items = call_api(url, label)
-        print(f"  수집: {len(items)}건")
-
-        for item in items:
-            name = (item.get("houseNm") or item.get("houseName") or "").strip()
-            area = (item.get("hssplyAdres") or "").strip()
-            if not name:
-                continue
-
-            today_tags    = []
-            upcoming_tags = []
-
-            for tag, (sf, ef) in date_fields.items():
-                s, e = sd(item.get(sf)), sd(item.get(ef))
-                if in_range(s, e, today_int):
-                    today_tags.append(tag)
-                elif s and not in_range(s, e, today_int):
-                    try:
-                        si = int(s)
-                        if today_int < si <= week_later:
-                            upcoming_tags.append(f"{tag}(~{s[4:6]}/{s[6:]}시작)")
-                    except ValueError:
-                        pass
-
-            pdate = sd(item.get(przwin_field))
-            if exact(pdate, today_int):
-                today_tags.append("당첨자발표")
-            elif pdate:
+            for i in range(count):
+                cell = cells.nth(i)
                 try:
-                    pi = int(pdate)
-                    if today_int < pi <= week_later:
-                        upcoming_tags.append(f"당첨자발표({pdate[4:6]}/{pdate[6:]})")
-                except ValueError:
-                    pass
+                    cell_text = cell.inner_text(timeout=2000)
+                except Exception:
+                    continue
 
-            if today_tags:
-                today_list.append(f"[{'·'.join(today_tags)}] {name} ({area})")
-            if upcoming_tags:
-                upcoming_list.append(f"[{'·'.join(upcoming_tags)}] {name} ({area})")
+                lines = [l.strip() for l in cell_text.split("\n") if l.strip()]
+                if not lines:
+                    continue
 
-    today_list    = sorted(set(today_list))
-    upcoming_list = sorted(set(upcoming_list))
-    print(f"\n🎯 오늘 {len(today_list)}건 / 향후7일 {len(upcoming_list)}건")
-    return {"today": today_list, "upcoming": upcoming_list, "errors": []}
+                # 첫 줄이 오늘 날짜 숫자인 칸
+                if lines[0] == today_day:
+                    print(f"  오늘({today_day}일) 칸 발견!")
+                    for line in lines[1:]:          # 날짜 숫자 제외
+                        clean = " ".join(line.split())
+                        if len(clean) > 1:          # 노이즈 제거
+                            today_info.append(clean)
+                    print(f"  오늘 일정 {len(today_info)}건 파싱 완료")
+                    break
 
+        except PWTimeout:
+            print("  ⚠️ iframe 타임아웃 → 전체 페이지 스크린샷으로 대체")
+            page.screenshot(path=str(SCREENSHOT_PATH))
+            screenshot_ok = True
+        except Exception as e:
+            print(f"  ⚠️ 예외 발생: {e} → 전체 페이지 스크린샷으로 대체")
+            page.screenshot(path=str(SCREENSHOT_PATH))
+            screenshot_ok = True
 
-# ── 이메일 ────────────────────────────────────────────────
+        browser.close()
 
-def item_list_html(items: list, dot_color: str) -> str:
-    if not items:
-        return "<p style='color:#999;text-align:center;padding:12px;'>해당 없음</p>"
-    rows = "".join(
-        f"<li style='padding:8px 0;border-bottom:1px dashed #ddd;font-size:14px;color:#222;'>"
-        f"<span style='color:{dot_color};font-weight:bold;'>●</span> {it}</li>"
-        for it in items
-    )
-    return f"<ul style='list-style:none;padding:0;margin:0;'>{rows}</ul>"
+    if not today_info:
+        today_info.append("오늘 예정된 아파트 청약 공급 일정이 없습니다.")
 
+    # 스크린샷 파일 유효성 확인
+    if screenshot_ok:
+        screenshot_ok = SCREENSHOT_PATH.exists() and SCREENSHOT_PATH.stat().st_size > 500
 
-def build_html(today: list, upcoming: list) -> str:
-    ds = datetime.now().strftime("%Y-%m-%d")
-    return f"""<html><body style="font-family:'Malgun Gothic',sans-serif;max-width:720px;margin:0 auto;color:#333;">
-<h2 style="color:#0056b3;border-bottom:3px solid #0056b3;padding-bottom:8px;">
-🏠 청약Home 오늘의 아파트 공급 정보</h2>
-<p><strong>{ds}</strong> 기준 청약 일정 알림입니다.</p>
-
-<h3 style="color:#0056b3;margin-top:20px;">📌 오늘 진행 중인 청약 ({len(today)}건)</h3>
-<div style="background:#f0f4ff;padding:16px;border-radius:6px;border:1px solid #c5d3f0;">
-{item_list_html(today, "#0056b3")}</div>
-
-<h3 style="color:#b84c00;margin-top:20px;">📅 향후 7일 내 시작 예정 ({len(upcoming)}건)</h3>
-<div style="background:#fff8f0;padding:16px;border-radius:6px;border:1px solid #e8c98a;">
-{item_list_html(upcoming, "#b84c00")}</div>
-
-<p style="font-size:11px;color:#aaa;margin-top:24px;border-top:1px solid #eee;padding-top:8px;">
-※ 공공데이터포털 한국부동산원 청약홈 API (APTLttotPblancSvc) 기반 자동 발송<br>
-※ 실제 일정은 <a href="https://www.applyhome.co.kr">applyhome.co.kr</a>에서 반드시 확인하세요.
-</p></body></html>"""
+    return today_info, screenshot_ok
 
 
-def send_email(result: dict):
-    today_list    = result.get("today", [])
-    upcoming_list = result.get("upcoming", [])
-    errors        = result.get("errors", [])
-    ds            = datetime.now().strftime("%Y-%m-%d")
+# ── 이메일 발송 ───────────────────────────────────────────
+def send_email(today_info: list[str], screenshot_ok: bool):
+    today    = datetime.now()
+    weekdays = ['월', '화', '수', '목', '금', '토', '일']
+    today_str = today.strftime("%Y-%m-%d")
+    subject  = f"🔔 [청약알림] {today_str}({weekdays[today.weekday()]}) 오늘의 아파트 청약 정보"
 
-    if errors:
-        html    = f"<p style='color:red;font-weight:bold;'>{errors[0]}</p>"
-        subject = f"🔔 [청약알림] {ds} - ⚠️ 오류 발생"
+    # 일정 목록 HTML
+    no_data_kw = ["없습니다", "없음"]
+    no_data    = any(kw in today_info[0] for kw in no_data_kw)
+
+    if no_data:
+        list_html = f"""
+        <p style="color:#666;font-size:14px;text-align:center;padding:20px 0;">
+          ℹ️ {today_info[0]}
+        </p>"""
     else:
-        html    = build_html(today_list, upcoming_list)
-        subject = f"🔔 [청약알림] {ds} - 오늘 {len(today_list)}건 / 7일내 {len(upcoming_list)}건"
+        items_html = "".join(
+            f"<li style='margin:10px 0;font-size:15px;font-weight:bold;"
+            f"color:#0056b3;border-bottom:1px dashed #eee;padding-bottom:8px;'>"
+            f"🏢 {item}</li>"
+            for item in today_info
+        )
+        list_html = f"<ul style='padding-left:10px;list-style:none;'>{items_html}</ul>"
 
-    msg            = MIMEMultipart("alternative")
+    # 스크린샷 유무에 따라 img 태그 분기
+    img_html = (
+        '<img src="cid:calendar_image" '
+        'style="width:100%;border:1px solid #ddd;border-radius:8px;margin-top:16px;display:block;">'
+        if screenshot_ok else
+        '<p style="color:#aaa;font-size:12px;">※ 달력 이미지를 불러오지 못했습니다.</p>'
+    )
+
+    html = f"""
+    <html>
+    <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;padding:20px;">
+      <div style="max-width:900px;margin:auto;background:#fff;border-radius:12px;
+                  padding:28px;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+
+        <h2 style="color:#0056b3;border-bottom:2px solid #0056b3;
+                   padding-bottom:10px;margin-bottom:20px;">
+          🏠 청약Home 오늘의 아파트 공급 정보
+        </h2>
+
+        <p>안녕하세요. <strong>{today_str}</strong> 기준
+           오늘 달력에 등록된 청약 일정 목록입니다.</p>
+
+        <div style="background:#f8f9fa;padding:20px;border-radius:8px;
+                    border:1px solid #e9ecef;margin:20px 0;">
+          {list_html}
+        </div>
+
+        <h3 style="color:#444;font-size:15px;margin-top:24px;">📅 이달 청약 달력</h3>
+        {img_html}
+
+        <p style="font-size:11px;color:#aaa;margin-top:24px;border-top:1px solid #eee;padding-top:10px;">
+          출처: <a href="{TARGET_URL}" style="color:#0056b3;">청약홈 applyhome.co.kr</a><br>
+          본 메일은 GitHub Actions 자동화 서버를 통해 발송되었습니다.
+        </p>
+      </div>
+    </body>
+    </html>"""
+
+    # MIME 구성 (related: 인라인 이미지 포함)
+    msg = MIMEMultipart("related")
     msg["Subject"] = subject
     msg["From"]    = SENDER_EMAIL
     msg["To"]      = RECEIVER_EMAIL
     msg.attach(MIMEText(html, "html"))
 
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as srv:
-            srv.ehlo(); srv.starttls(); srv.ehlo()
-            srv.login(SENDER_EMAIL, SENDER_PASSWORD)
-            srv.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        print(f"📧 발송 성공! 제목: {subject}")
-    except Exception as e:
-        print(f"❌ 발송 실패: {e}")
-        raise
+    if screenshot_ok:
+        with open(SCREENSHOT_PATH, "rb") as f:
+            img = MIMEImage(f.read())
+            img.add_header("Content-ID", "<calendar_image>")
+            img.add_header("Content-Disposition", "inline", filename="apt_calendar.png")
+            msg.attach(img)
+
+    print(f"이메일 발송 중 → {RECEIVER_EMAIL}")
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.ehlo()
+        smtp.login(SENDER_EMAIL, SENDER_PASSWORD)
+        smtp.send_message(msg)
+
+    print(f"✅ 발송 완료! ({len(today_info)}건)")
+
+
+# ── 진입점 ────────────────────────────────────────────────
+def main():
+    print("=" * 55)
+    print("  청약 일정 알림 시작 (Playwright / GitHub Actions)")
+    print("=" * 55)
+
+    today_info, screenshot_ok = scrape_calendar()
+    send_email(today_info, screenshot_ok)
 
 
 if __name__ == "__main__":
-    result = get_subscription_data()
-    send_email(result)
+    main()
