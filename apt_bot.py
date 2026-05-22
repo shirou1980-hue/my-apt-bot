@@ -60,7 +60,7 @@ def scrape_calendar() -> tuple[list[str], bool]:
 
         print("  페이지 로딩...")
         page.goto(TARGET_URL, wait_until="networkidle", timeout=40000)
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(8000)
 
         # ── iframe 체인 진입 ──────────────────────────────
         # 청약홈은 메인 → sub_iframe → iframe_calendar 2중 구조
@@ -72,7 +72,7 @@ def scrape_calendar() -> tuple[list[str], bool]:
             )
 
             # 달력 테이블 로딩 대기
-            cal.locator(".calendar_body").wait_for(timeout=20000)
+            cal.locator(".calendar_body").wait_for(timeout=30000)
             print("  달력 iframe 진입 성공")
 
             # ── 스크린샷 ─────────────────────────────────
