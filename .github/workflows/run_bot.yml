@@ -36,4 +36,4 @@ jobs:
           GMAIL_ADDRESS:  ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-        run: python apt_alert.py
+      run: python apt_bot.py
