@@ -19,20 +19,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: pip 캐시
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-playwright-v1
-
-      - name: Playwright 설치
-        run: |
-          pip install playwright
-          playwright install chromium
-          playwright install-deps chromium
-
       - name: 청약 알림 실행
         env:
           GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          PUBLIC_DATA_API_KEY: ${{ secrets.PUBLIC_DATA_API_KEY }} # 🔥 드디어 출입증이 파이썬으로 전달됩니다!
         run: python apt_bot.py
