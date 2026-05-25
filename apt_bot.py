@@ -46,7 +46,8 @@ def fetch_api_data(url: str) -> list:
         return []
 
 def get_subscription_data() -> list:
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 훈련용 타임머신 세팅: 날짜를 내일(26일)로 강제 고정해 봅니다.
+today = datetime(2026, 5, 26)
     print(f"📅 데이터 필터링 기준 날짜: {today.strftime('%Y-%m-%d')}")
 
     if not PUBLIC_API_KEY:
