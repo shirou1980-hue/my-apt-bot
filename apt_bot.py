@@ -46,31 +46,30 @@ def fetch_api_data(url: str) -> list:
         return []
 
 def get_subscription_data() -> list:
-    # 🔥 [타임머신 테스트] 내일 26일 날짜로 고정
+    # 🔥 [타임머신 테스트] 내일 26일 날짜로 기준 고정
     today = datetime(2026, 5, 26)
-    
-    # 🔥 [핵심 보완] API 서버에 "2026년 05월"에 해당하는 전체 데이터를 내놓으라고 명시합니다.
-    target_month = today.strftime("%Y%m") 
-    print(f"📅 필터링 기준일: {today.strftime('%Y-%m-%d')} | API 조회 대상월: {target_month}")
+    print(f"📅 데이터 매칭 정밀 필터링 기준일: {today.strftime('%Y-%m-%d')}")
 
     if not PUBLIC_API_KEY:
         return ["⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다."]
 
     results = []
 
-    # 🔗 startMonth=202605 파라미터를 강제 주입하여 당월 공고를 모두 긁어옵니다.
-    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startMonth={target_month}&_type=json"
-    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startMonth={target_month}&_type=json"
+    # 🔥 [최종 조치] 날짜 제한(startMonth) 파라미터를 과감히 삭제하고, 최대 출력(2000건)으로 과거 분양 공고까지 전수 조사합니다.
+    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=2000&pageNo=1&_type=json"
+    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=2000&pageNo=1&_type=json"
 
-    print("[API] 정부 청약 데이터베이스 당월 마스터 데이터 호출...")
+    print("[API] 대량 마스터 데이터베이스 전수 다운로드 가동...")
     apt_items = fetch_api_data(url_apt)
     remndr_items = fetch_api_data(url_remndr)
+    print(f"-> 전체 적재 완료 (일반분양: {len(apt_items)}건 / 무순위: {len(remndr_items)}건)")
 
-    # 1) 일반 아파트 마스터 정밀 필터링
+    # 1) 일반 아파트 마스터 전수 조사 및 매칭
     for item in apt_items:
         name = item.get("houseNm", "").strip()
         area = item.get("hssplyAdres", "").strip()
         
+        # 수도권 스크리닝 필터
         if not any(k in area for k in ["서울", "경기", "인천"]):
             continue
 
@@ -91,7 +90,7 @@ def get_subscription_data() -> list:
         if tags:
             results.append(f"[{'/'.join(tags)}] {name} ({area})")
 
-    # 2) 무순위 / 잔여세대 마스터 정밀 필터링
+    # 2) 무순위 / 잔여세대 마스터 전수 조사 및 매칭
     for item in remndr_items:
         name = item.get("houseNm", "").strip()
         area = item.get("hssplyAdres", "").strip()
@@ -114,7 +113,7 @@ def get_subscription_data() -> list:
             results.append(f"[{'/'.join(tags)}] {name} ({area})")
 
     results = sorted(list(set(results)))
-    print(f"🎯 [필터링 완료] 5/26 매칭 단지: 총 {len(results)}건")
+    print(f"🎯 [매칭 완료] 5/26 검증 타깃 단지 수: 총 {len(results)}건")
     return results
 
 def send_email(contents: list):
@@ -126,7 +125,7 @@ def send_email(contents: list):
         body_html = "<p style='color:#666;font-size:14px;font-weight:bold;text-align:center;padding:25px 0;'>ℹ️ 오늘 진행 중인 수도권 아파트 공급 일정이 없습니다.</p>"
         cnt_str = "0건"
     else:
-        items_html = "".join([f"<li style='margin:12px 0;font-size:15px;font-weight:bold;color:#0056b3;border-bottom:1px dashed #eee;padding-bottom:10px;'>🏢 {item}</li>" for item in contents])
+        items_html = "".join([f"<li style='margin:14px 0;font-size:15px;font-weight:bold;color:#0056b3;border-bottom:1px dashed #eee;padding-bottom:10px;'>🏢 {item}</li>" for item in contents])
         body_html = f"<ul style='padding-left:10px;list-style-type:none;'>{items_html}</ul>"
         cnt_str = f"{len(contents)}건"
 
