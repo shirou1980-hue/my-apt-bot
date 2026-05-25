@@ -15,7 +15,6 @@ RECEIVER_EMAIL   = os.environ.get("RECEIVER_EMAIL")
 PUBLIC_API_KEY   = os.environ.get("PUBLIC_DATA_API_KEY", "")
 
 def parse_to_date(date_str: str):
-    """다양한 날짜 포맷(하이픈 유무 등)을 파이썬 datetime 객체로 안전하게 변환"""
     if not date_str:
         return None
     clean_str = str(date_str).replace("-", "").strip()
@@ -46,74 +45,81 @@ def fetch_api_data(url: str) -> list:
         return []
 
 def get_subscription_data() -> list:
-    # 🔥 [타임머신 테스트] 내일 26일 날짜로 기준 고정
+    # 🔥 [타임머신 테스트] 내일 26일 날짜 고정
     today = datetime(2026, 5, 26)
-    print(f"📅 데이터 매칭 정밀 필터링 기준일: {today.strftime('%Y-%m-%d')}")
+    
+    # 누락 방지를 위해 당월(5월)과 전월(4월) 공고 데이터를 싹 다 긁어옵니다.
+    curr_m = today.strftime("%Y%m")
+    prev_m = f"{today.year-1}12" if today.month == 1 else f"{today.year}{today.month-1:02d}"
 
     if not PUBLIC_API_KEY:
         return ["⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다."]
 
-    results = []
+    all_items = []
+    
+    # 🔗 1. 일반분양 마스터 (당월 + 전월)
+    url_apt_curr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startmonth={curr_m}&_type=json"
+    url_apt_prev = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startmonth={prev_m}&_type=json"
+    
+    # 🔗 2. 무순위/잔여세대 마스터 (당월 + 전월)
+    url_remndr_curr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startmonth={curr_m}&_type=json"
+    url_remndr_prev = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startmonth={prev_m}&_type=json"
 
-    # 🔥 [최종 조치] 날짜 제한(startMonth) 파라미터를 과감히 삭제하고, 최대 출력(2000건)으로 과거 분양 공고까지 전수 조사합니다.
-    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=2000&pageNo=1&_type=json"
-    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=2000&pageNo=1&_type=json"
+    print("[API] 4~5월 누적 데이터 4중 파이프라인 가동...")
+    
+    for p_type, url in [("APT", url_apt_curr), ("APT", url_apt_prev), ("REMNDR", url_remndr_curr), ("REMNDR", url_remndr_prev)]:
+        fetched = fetch_api_data(url)
+        for item in fetched:
+            item["_type"] = p_type  # 일반/무순위 식별표
+            all_items.append(item)
 
-    print("[API] 대량 마스터 데이터베이스 전수 다운로드 가동...")
-    apt_items = fetch_api_data(url_apt)
-    remndr_items = fetch_api_data(url_remndr)
-    print(f"-> 전체 적재 완료 (일반분양: {len(apt_items)}건 / 무순위: {len(remndr_items)}건)")
+    unique_results = set()
 
-    # 1) 일반 아파트 마스터 전수 조사 및 매칭
-    for item in apt_items:
+    # 데이터 정밀 필터링 시작
+    for item in all_items:
         name = item.get("houseNm", "").strip()
         area = item.get("hssplyAdres", "").strip()
         
-        # 수도권 스크리닝 필터
         if not any(k in area for k in ["서울", "경기", "인천"]):
             continue
-
-        rcept_bgnde = parse_to_date(item.get("rceptBgnde"))
-        rcept_endde = parse_to_date(item.get("rceptEndde"))
-        spt_bgnde   = parse_to_date(item.get("sptPblancHseRceptBgnde"))
-        spt_endde   = parse_to_date(item.get("sptPblancHseRceptEndde"))
-        przwin_de   = parse_to_date(item.get("przwinPblancDe"))
-        cntrct_bgnde = parse_to_date(item.get("cntrctBgnde"))
-        cntrct_endde = parse_to_date(item.get("cntrctEndde"))
 
         tags = []
-        if rcept_bgnde and rcept_endde and rcept_bgnde <= today <= rcept_endde: tags.append("일반접수")
-        if spt_bgnde and spt_endde and spt_bgnde <= today <= spt_endde: tags.append("특공접수")
-        if przwin_de and przwin_de == today: tags.append("당첨자발표")
-        if cntrct_bgnde and cntrct_endde and cntrct_bgnde <= today <= cntrct_endde: tags.append("계약일")
-
-        if tags:
-            results.append(f"[{'/'.join(tags)}] {name} ({area})")
-
-    # 2) 무순위 / 잔여세대 마스터 전수 조사 및 매칭
-    for item in remndr_items:
-        name = item.get("houseNm", "").strip()
-        area = item.get("hssplyAdres", "").strip()
+        p_type = item.get("_type")
         
-        if not any(k in area for k in ["서울", "경기", "인천"]):
-            continue
-
-        sub_bgnde = parse_to_date(item.get("subscrptRceptBgnde"))
-        sub_endde = parse_to_date(item.get("subscrptRceptEndde"))
+        # 공통 변수 (당첨자발표, 계약체결) -> 🔥 정확한 규격 이름표(cntrctCnclsBgnde)로 수정 완료!
         przwin_de = parse_to_date(item.get("przwinPblancDe"))
-        cntrct_bgnde = parse_to_date(item.get("cntrctBgnde"))
-        cntrct_endde = parse_to_date(item.get("cntrctEndde"))
+        cntrct_start = parse_to_date(item.get("cntrctCnclsBgnde"))
+        cntrct_end = parse_to_date(item.get("cntrctCnclsEndde"))
 
-        tags = []
-        if sub_bgnde and sub_endde and sub_bgnde <= today <= sub_endde: tags.append("무순위접수")
+        if p_type == "APT":
+            # 🔥 일반 분양의 특공/일반 규격 이름표 전면 교정 완료!
+            spsply_start = parse_to_date(item.get("spsplyRceptBgnde"))
+            spsply_end = parse_to_date(item.get("spsplyRceptEndde"))
+            gnrl_start = parse_to_date(item.get("rceptBgnde"))
+            gnrl_end = parse_to_date(item.get("rceptEndde"))
+            gnrl1_start = parse_to_date(item.get("gnrlRnk1crRceptBgnde"))
+            gnrl1_end = parse_to_date(item.get("gnrlRnk1crRceptEndde"))
+
+            if spsply_start and spsply_end and spsply_start <= today <= spsply_end:
+                tags.append("특공접수")
+            if (gnrl_start and gnrl_end and gnrl_start <= today <= gnrl_end) or \
+               (gnrl1_start and gnrl1_end and gnrl1_start <= today <= gnrl1_end):
+                tags.append("일반접수")
+
+        elif p_type == "REMNDR":
+            sub_start = parse_to_date(item.get("subscrptRceptBgnde"))
+            sub_end = parse_to_date(item.get("subscrptRceptEndde"))
+            if sub_start and sub_end and sub_start <= today <= sub_end:
+                tags.append("무순위접수")
+
         if przwin_de and przwin_de == today: tags.append("당첨자발표")
-        if cntrct_bgnde and cntrct_endde and cntrct_bgnde <= today <= cntrct_endde: tags.append("계약일")
+        if cntrct_start and cntrct_end and cntrct_start <= today <= cntrct_end: tags.append("계약일")
 
         if tags:
-            results.append(f"[{'/'.join(tags)}] {name} ({area})")
+            unique_results.add(f"[{'/'.join(tags)}] {name} ({area})")
 
-    results = sorted(list(set(results)))
-    print(f"🎯 [매칭 완료] 5/26 검증 타깃 단지 수: 총 {len(results)}건")
+    results = sorted(list(unique_results))
+    print(f"🎯 [최종 수리 완료] 5/26 매칭 단지: 총 {len(results)}건")
     return results
 
 def send_email(contents: list):
