@@ -46,9 +46,9 @@ def fetch_api_data(url: str) -> list:
         return []
 
 def get_subscription_data() -> list:
-    # 훈련용 타임머신 세팅: 날짜를 내일(26일)로 강제 고정해 봅니다.
-today = datetime(2026, 5, 26)
-    print(f"📅 데이터 필터링 기준 날짜: {today.strftime('%Y-%m-%d')}")
+    # 🔥 [타임머신 테스트 세팅] 내일(26일) 날짜로 강제 인식하도록 들여쓰기를 완벽히 맞췄습니다.
+    today = datetime(2026, 5, 26)
+    print(f"📅 데이터 필터링 기준 날짜 (훈련 모드): {today.strftime('%Y-%m-%d')}")
 
     if not PUBLIC_API_KEY:
         return ["⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다."]
@@ -112,11 +112,11 @@ today = datetime(2026, 5, 26)
             results.append(f"[{'/'.join(tags)}] {name} ({area})")
 
     results = sorted(list(set(results)))
-    print(f"🎯 [수도권 동기화 완료] 오늘 유효 일정: 총 {len(results)}건 매칭")
+    print(f"🎯 [수도권 동기화 완료] 5/26 가상 일정: 총 {len(results)}건 매칭")
     return results
 
 def send_email(contents: list):
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = "2026-05-26"  # 메일 본문 날짜 표시도 내일로 고정
     no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "⚠️"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
@@ -129,7 +129,6 @@ def send_email(contents: list):
         cnt_str = f"{len(contents)}건"
 
     msg = MIMEMultipart("alternative")
-    # 🔥 이메일 제목과 송신자 선언부 인코딩 깨짐을 완벽하게 예방
     msg["Subject"] = f"🔔 [청약홈 동기화] 수도권 정밀 캘린더 ({cnt_str})"
     msg["From"]    = SENDER_EMAIL
     msg["To"]      = RECEIVER_EMAIL
@@ -155,7 +154,6 @@ def send_email(contents: list):
     </body>
     </html>"""
 
-    # 🔥 메일 본문 삽입 시 utf-8 인코딩 명시로 다이아몬드 물음표 차단
     msg.attach(MIMEText(html, "html", "utf-8"))
 
     try:
