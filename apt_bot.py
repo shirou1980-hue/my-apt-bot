@@ -46,20 +46,23 @@ def fetch_api_data(url: str) -> list:
         return []
 
 def get_subscription_data() -> list:
-    # 🔥 [타임머신 테스트 세팅] 내일(26일) 날짜로 강제 인식하도록 들여쓰기를 완벽히 맞췄습니다.
+    # 🔥 [타임머신 테스트] 내일 26일 날짜로 고정
     today = datetime(2026, 5, 26)
-    print(f"📅 데이터 필터링 기준 날짜 (훈련 모드): {today.strftime('%Y-%m-%d')}")
+    
+    # 🔥 [핵심 보완] API 서버에 "2026년 05월"에 해당하는 전체 데이터를 내놓으라고 명시합니다.
+    target_month = today.strftime("%Y%m") 
+    print(f"📅 필터링 기준일: {today.strftime('%Y-%m-%d')} | API 조회 대상월: {target_month}")
 
     if not PUBLIC_API_KEY:
         return ["⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다."]
 
     results = []
 
-    # 2중 파이프라인 마스터 데이터 동시 타격
-    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&_type=json"
-    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&_type=json"
+    # 🔗 startMonth=202605 파라미터를 강제 주입하여 당월 공고를 모두 긁어옵니다.
+    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startMonth={target_month}&_type=json"
+    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&startMonth={target_month}&_type=json"
 
-    print("[API] 정부 청약 데이터베이스 연계 호출 시작...")
+    print("[API] 정부 청약 데이터베이스 당월 마스터 데이터 호출...")
     apt_items = fetch_api_data(url_apt)
     remndr_items = fetch_api_data(url_remndr)
 
@@ -68,7 +71,6 @@ def get_subscription_data() -> list:
         name = item.get("houseNm", "").strip()
         area = item.get("hssplyAdres", "").strip()
         
-        # 수도권(서울, 경기, 인천) 데이터만 선별하기 위한 가드닝 코드
         if not any(k in area for k in ["서울", "경기", "인천"]):
             continue
 
@@ -112,11 +114,11 @@ def get_subscription_data() -> list:
             results.append(f"[{'/'.join(tags)}] {name} ({area})")
 
     results = sorted(list(set(results)))
-    print(f"🎯 [수도권 동기화 완료] 5/26 가상 일정: 총 {len(results)}건 매칭")
+    print(f"🎯 [필터링 완료] 5/26 매칭 단지: 총 {len(results)}건")
     return results
 
 def send_email(contents: list):
-    today_str = "2026-05-26"  # 메일 본문 날짜 표시도 내일로 고정
+    today_str = "2026-05-26"
     no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "⚠️"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
@@ -124,7 +126,7 @@ def send_email(contents: list):
         body_html = "<p style='color:#666;font-size:14px;font-weight:bold;text-align:center;padding:25px 0;'>ℹ️ 오늘 진행 중인 수도권 아파트 공급 일정이 없습니다.</p>"
         cnt_str = "0건"
     else:
-        items_html = "".join([f"<li style='margin:14px 0;font-size:15px;font-weight:bold;color:#0056b3;border-bottom:1px dashed #eee;padding-bottom:10px;'>🏢 {item}</li>" for item in contents])
+        items_html = "".join([f"<li style='margin:12px 0;font-size:15px;font-weight:bold;color:#0056b3;border-bottom:1px dashed #eee;padding-bottom:10px;'>🏢 {item}</li>" for item in contents])
         body_html = f"<ul style='padding-left:10px;list-style-type:none;'>{items_html}</ul>"
         cnt_str = f"{len(contents)}건"
 
