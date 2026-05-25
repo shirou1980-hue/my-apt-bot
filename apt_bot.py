@@ -104,3 +104,6 @@ def get_subscription_data() -> list:
         
         sub_start = parse_to_date(item.get("subscrptRceptBgnde"))
         sub_end = parse_to_date(item.get("subscrptRceptEndde"))
+if __name__ == "__main__":
+    data = get_subscription_data()
+    send_email(data)
