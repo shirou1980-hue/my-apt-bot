@@ -27,36 +27,53 @@ def parse_to_date(date_str: str):
             return None
     return None
 
-def fetch_api_data(url: str, retries=3) -> list:
+def get_val(item, keys: list) -> str:
+    """구형 소문자 키와 신형 대문자 키를 모두 대응하여 값을 뽑아내는 만능 함수"""
+    for k in keys:
+        if k in item and item[k] is not None:
+            return str(item[k]).strip()
+    return ""
+
+def fetch_all_pages(base_url: str, retries=3) -> list:
+    """1페이지만 보지 않고, 데이터가 끝날 때까지 최대 10페이지(1만 건)를 싹쓸이합니다."""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json'
     }
+    all_data = []
+    page = 1
     
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                raw = resp.read().decode("utf-8")
+    while page <= 10:
+        url = f"{base_url}&page={page}&perPage=1000"
+        success = False
+        
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    raw = resp.read().decode("utf-8")
+                
+                resp_json = json.loads(raw)
+                
+                if "data" in resp_json and resp_json["data"]:
+                    all_data.extend(resp_json["data"])
+                    success = True
+                break # 데이터 수신 성공 시 재시도 탈출
+                
+            except HTTPError as e:
+                time.sleep(2)
+            except Exception as e:
+                time.sleep(2)
+                
+        # 더 이상 받아올 데이터가 없거나 실패했으면 페이지 넘기기 중단
+        if not success:
+            break
             
-            resp_json = json.loads(raw)
-            if "data" in resp_json:
-                return resp_json["data"]
-            return []
-            
-        except HTTPError as e:
-            try: err_msg = e.read().decode('utf-8', errors='ignore')
-            except: err_msg = ""
-            print(f"⚠️ API 통신 에러 (HTTP {e.code}): {err_msg[:200]}")
-            time.sleep(2)
-        except Exception as e:
-            print(f"⚠️ 기타 통신 실패: {e}")
-            time.sleep(2)
-            
-    return None
+        page += 1
+        
+    return all_data
 
 def get_subscription_data() -> tuple:
-    # 🌟 오늘, 그리고 1주 전 ~ 2주 후의 날짜 윈도우 계산
     today = datetime.utcnow() + timedelta(hours=9)
     today = today.replace(hour=0, minute=0, second=0, microsecond=0)
     
@@ -72,34 +89,35 @@ def get_subscription_data() -> tuple:
     safe_key = PUBLIC_API_KEY.strip()
     encoded_key = urllib.parse.quote(safe_key)
 
-    url_apt = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail?page=1&perPage=1000&serviceKey={encoded_key}"
-    url_remndr = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getRemndrLttotPblancDetail?page=1&perPage=1000&serviceKey={encoded_key}"
+    url_apt = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail?serviceKey={encoded_key}"
+    url_remndr = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getRemndrLttotPblancDetail?serviceKey={encoded_key}"
 
-    print("[API] 최신 클라우드 서버 직접 호출 가동...")
-    apt_items = fetch_api_data(url_apt)
-    remndr_items = fetch_api_data(url_remndr)
+    print("[API] 최신 클라우드 서버 싹쓸이 호출 가동...")
+    apt_items = fetch_all_pages(url_apt)
+    remndr_items = fetch_all_pages(url_remndr)
     
-    if apt_items is None and remndr_items is None:
-        return ["⚠️ 공공데이터포털 서버 장애로 인해 데이터를 불러올 수 없습니다."], window_str
+    if not apt_items and not remndr_items:
+        return ["⚠️ 공공데이터포털 서버 장애 또는 권한 오류로 데이터를 불러올 수 없습니다."], window_str
         
-    apt_items = apt_items or []
-    remndr_items = remndr_items or []
+    if apt_items:
+        print(f"💡 [진단] 신형 서버가 내려준 실제 데이터 키(Key) 샘플: {list(apt_items[0].keys())}")
+        
     unique_results = set()
 
     for item in apt_items:
-        name = item.get("houseNm", "").strip()
-        area = item.get("hssplyAdres", "").strip()
+        # 🔥 대문자/소문자 모두 완벽 방어
+        name = get_val(item, ["houseNm", "HOUSE_NM", "house_nm"])
+        area = get_val(item, ["hssplyAdres", "HSSPLY_ADRES", "hssply_adres"])
         if not any(k in area for k in ["서울", "경기", "인천"]): continue
 
-        przwin_de = parse_to_date(item.get("przwinPblancDe"))
-        cntrct_start = parse_to_date(item.get("cntrctCnclsBgnde"))
-        cntrct_end = parse_to_date(item.get("cntrctCnclsEndde"))
-        spsply_start = parse_to_date(item.get("spsplyRceptBgnde"))
-        spsply_end = parse_to_date(item.get("spsplyRceptEndde"))
-        gnrl_start = parse_to_date(item.get("rceptBgnde"))
-        gnrl_end = parse_to_date(item.get("rceptEndde"))
+        przwin_de = parse_to_date(get_val(item, ["przwinPblancDe", "PRZWIN_PBLANC_DE"]))
+        cntrct_start = parse_to_date(get_val(item, ["cntrctCnclsBgnde", "CNTRCT_CNCLS_BGNDE"]))
+        cntrct_end = parse_to_date(get_val(item, ["cntrctCnclsEndde", "CNTRCT_CNCLS_ENDDE"]))
+        spsply_start = parse_to_date(get_val(item, ["spsplyRceptBgnde", "SPSPLY_RCEPT_BGNDE"]))
+        spsply_end = parse_to_date(get_val(item, ["spsplyRceptEndde", "SPSPLY_RCEPT_ENDDE"]))
+        gnrl_start = parse_to_date(get_val(item, ["rceptBgnde", "RCEPT_BGNDE"]))
+        gnrl_end = parse_to_date(get_val(item, ["rceptEndde", "RCEPT_ENDDE"]))
 
-        # 기간 겹침 확인 (시작일이 윈도우 종료일 이전이고, 종료일이 윈도우 시작일 이후면 포함)
         if spsply_start and spsply_end and spsply_start <= end_window and spsply_end >= start_window:
             unique_results.add(f"[특공접수] {spsply_start.strftime('%m.%d')}~{spsply_end.strftime('%m.%d')} | {name} ({area})")
         if gnrl_start and gnrl_end and gnrl_start <= end_window and gnrl_end >= start_window:
@@ -110,15 +128,15 @@ def get_subscription_data() -> tuple:
             unique_results.add(f"[계약체결] {cntrct_start.strftime('%m.%d')}~{cntrct_end.strftime('%m.%d')} | {name} ({area})")
 
     for item in remndr_items:
-        name = item.get("houseNm", "").strip()
-        area = item.get("hssplyAdres", "").strip()
+        name = get_val(item, ["houseNm", "HOUSE_NM", "house_nm"])
+        area = get_val(item, ["hssplyAdres", "HSSPLY_ADRES", "hssply_adres"])
         if not any(k in area for k in ["서울", "경기", "인천"]): continue
 
-        przwin_de = parse_to_date(item.get("przwinPblancDe"))
-        cntrct_start = parse_to_date(item.get("cntrctCnclsBgnde"))
-        cntrct_end = parse_to_date(item.get("cntrctCnclsEndde"))
-        sub_start = parse_to_date(item.get("subscrptRceptBgnde"))
-        sub_end = parse_to_date(item.get("subscrptRceptEndde"))
+        przwin_de = parse_to_date(get_val(item, ["przwinPblancDe", "PRZWIN_PBLANC_DE"]))
+        cntrct_start = parse_to_date(get_val(item, ["cntrctCnclsBgnde", "CNTRCT_CNCLS_BGNDE"]))
+        cntrct_end = parse_to_date(get_val(item, ["cntrctCnclsEndde", "CNTRCT_CNCLS_ENDDE"]))
+        sub_start = parse_to_date(get_val(item, ["subscrptRceptBgnde", "SUBSCRPT_RCEPT_BGNDE"]))
+        sub_end = parse_to_date(get_val(item, ["subscrptRceptEndde", "SUBSCRPT_RCEPT_ENDDE"]))
 
         if sub_start and sub_end and sub_start <= end_window and sub_end >= start_window:
             unique_results.add(f"[무순위접수] {sub_start.strftime('%m.%d')}~{sub_end.strftime('%m.%d')} | {name} ({area})")
