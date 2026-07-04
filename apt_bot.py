@@ -4,7 +4,7 @@ import json
 import urllib.request
 from urllib.error import HTTPError
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -26,12 +26,10 @@ def parse_to_date(date_str: str):
             return None
     return None
 
-def fetch_api_data(url: str, safe_key: str, retries=3) -> list:
-    # 🔥 신형 클라우드 서버(odcloud) 전용 프리패스 인증(Infuser) 적용
+def fetch_api_data(url: str, retries=3) -> list:
+    # 🔥 봇(Bot) 차단 방화벽을 뚫기 위한 크롬 위장 헤더
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Authorization': f'Infuser {safe_key}'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
     }
     
     for attempt in range(retries):
@@ -41,23 +39,20 @@ def fetch_api_data(url: str, safe_key: str, retries=3) -> list:
                 raw = resp.read().decode("utf-8")
             
             resp_json = json.loads(raw)
-            
-            # 🔥 신형 서버는 데이터를 'data'라는 이름의 리스트로 줍니다.
-            if "data" in resp_json:
-                return resp_json["data"]
-            
-            # 구형 데이터 구조(items) 대비용 폴백
             items_data = resp_json.get("response", {}).get("body", {}).get("items", {})
-            if isinstance(items_data, dict):
-                items = items_data.get("item", [])
-                return [items] if isinstance(items, dict) else items
-            return []
+            
+            if not items_data or items_data == "" or isinstance(items_data, str):
+                return []
+                
+            items = items_data.get("item", [])
+            if isinstance(items, dict):
+                return [items]
+            return items
             
         except HTTPError as e:
-            try:
-                err_msg = e.read().decode('utf-8', errors='ignore')
-            except:
-                err_msg = ""
+            err_msg = ""
+            try: err_msg = e.read().decode('utf-8', errors='ignore')
+            except: pass
             print(f"⚠️ API 통신 에러 (HTTP {e.code}): {err_msg[:200]}")
             time.sleep(2)
         except Exception as e:
@@ -67,25 +62,28 @@ def fetch_api_data(url: str, safe_key: str, retries=3) -> list:
     return None
 
 def get_subscription_data() -> list:
-    # 훈련용 타임머신 세팅 (성공 시 today = datetime.now() 로 복구)
-    today = datetime(2026, 5, 26)
-    print(f"📅 데이터 매칭 정밀 필터링 기준일: {today.strftime('%Y-%m-%d')}")
+    # 🔥 [수정 완료] 강제 타임머신을 끄고, 한국 시간(KST) '오늘'을 자동으로 계산합니다.
+    today = datetime.utcnow() + timedelta(hours=9)
+    today = today.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    today_str = today.strftime('%Y-%m-%d')
+    print(f"📅 데이터 매칭 정밀 필터링 기준일: {today_str}")
 
     if not PUBLIC_API_KEY:
         return ["⚠️ PUBLIC_DATA_API_KEY가 깃허브에 설정되지 않았습니다."]
 
     safe_key = PUBLIC_API_KEY.strip()
 
-    # 🔥 파이썬의 목적지를 구형(apis.data)에서 선생님 키에 맞는 신형(api.odcloud)으로 완벽하게 교체
-    url_apt = "https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancMstList?page=1&perPage=1000"
-    url_remndr = "https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getRemndrMstList?page=1&perPage=1000"
+    # 🔥 [수정 완료] 주소를 다시 청약홈 진짜 데이터가 있는 구형 메인 서버로 원복했습니다.
+    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={safe_key}&numOfRows=1000&pageNo=1&_type=json"
+    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={safe_key}&numOfRows=1000&pageNo=1&_type=json"
 
-    print("[API] 최신 클라우드(odcloud) 서버 데이터 다운로드 가동...")
-    apt_items = fetch_api_data(url_apt, safe_key)
-    remndr_items = fetch_api_data(url_remndr, safe_key)
+    print("[API] 공공데이터포털 실시간 서버(apis.data.go.kr) 다운로드 가동...")
+    apt_items = fetch_api_data(url_apt)
+    remndr_items = fetch_api_data(url_remndr)
     
     if apt_items is None and remndr_items is None:
-        return ["⚠️ 공공데이터포털 정부 서버 장애(500 Error) 또는 인증 오류로 데이터를 불러올 수 없습니다."]
+        return ["⚠️ 공공데이터포털 정부 서버 장애 또는 인증 오류로 데이터를 불러올 수 없습니다."]
         
     apt_items = apt_items or []
     remndr_items = remndr_items or []
@@ -129,11 +127,12 @@ def get_subscription_data() -> list:
         if tags: unique_results.add(f"[{'/'.join(tags)}] {name} ({area})")
 
     results = sorted(list(unique_results))
-    print(f"🎯 [매칭 완료] 5/26 검증 타깃 단지 수: 총 {len(results)}건")
+    print(f"🎯 [매칭 완료] 오늘 기준 검증 타깃 단지 수: 총 {len(results)}건")
     return results
 
 def send_email(contents: list):
-    today_str = "2026-05-26"
+    # 메일 발송용 날짜도 오늘 날짜로 자동 동기화
+    today_str = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
     no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "⚠️"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
