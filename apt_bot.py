@@ -40,8 +40,6 @@ def fetch_api_data(url: str, retries=3) -> list:
                 raw = resp.read().decode("utf-8")
             
             resp_json = json.loads(raw)
-            
-            # 신형 서버의 데이터 주머니인 'data'를 꺼냅니다.
             if "data" in resp_json:
                 return resp_json["data"]
             return []
@@ -57,30 +55,32 @@ def fetch_api_data(url: str, retries=3) -> list:
             
     return None
 
-def get_subscription_data() -> list:
-    # 🌟 한국 시간(KST) '오늘' 날짜 자동 계산
+def get_subscription_data() -> tuple:
+    # 🌟 오늘, 그리고 1주 전 ~ 2주 후의 날짜 윈도우 계산
     today = datetime.utcnow() + timedelta(hours=9)
     today = today.replace(hour=0, minute=0, second=0, microsecond=0)
     
-    today_str = today.strftime('%Y-%m-%d')
-    print(f"📅 데이터 매칭 정밀 필터링 기준일: {today_str}")
+    start_window = today - timedelta(days=7)
+    end_window = today + timedelta(days=14)
+    
+    window_str = f"{start_window.strftime('%Y-%m-%d')} ~ {end_window.strftime('%Y-%m-%d')}"
+    print(f"📅 데이터 탐색 기간: {window_str}")
 
     if not PUBLIC_API_KEY:
-        return ["⚠️ PUBLIC_DATA_API_KEY가 깃허브에 설정되지 않았습니다."]
+        return ["⚠️ PUBLIC_DATA_API_KEY가 깃허브에 설정되지 않았습니다."], window_str
 
     safe_key = PUBLIC_API_KEY.strip()
     encoded_key = urllib.parse.quote(safe_key)
 
-    # 🔥 스캔으로 찾아낸 '진짜 방 번호(Detail)'로 주소 전면 교체 완료!
     url_apt = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancDetail?page=1&perPage=1000&serviceKey={encoded_key}"
     url_remndr = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getRemndrLttotPblancDetail?page=1&perPage=1000&serviceKey={encoded_key}"
 
-    print("[API] 공공데이터포털(신형) 진짜 데이터 호출 가동...")
+    print("[API] 최신 클라우드 서버 직접 호출 가동...")
     apt_items = fetch_api_data(url_apt)
     remndr_items = fetch_api_data(url_remndr)
     
     if apt_items is None and remndr_items is None:
-        return ["⚠️ 공공데이터포털 서버 장애로 인해 데이터를 불러올 수 없습니다."]
+        return ["⚠️ 공공데이터포털 서버 장애로 인해 데이터를 불러올 수 없습니다."], window_str
         
     apt_items = apt_items or []
     remndr_items = remndr_items or []
@@ -91,7 +91,6 @@ def get_subscription_data() -> list:
         area = item.get("hssplyAdres", "").strip()
         if not any(k in area for k in ["서울", "경기", "인천"]): continue
 
-        tags = []
         przwin_de = parse_to_date(item.get("przwinPblancDe"))
         cntrct_start = parse_to_date(item.get("cntrctCnclsBgnde"))
         cntrct_end = parse_to_date(item.get("cntrctCnclsEndde"))
@@ -100,40 +99,44 @@ def get_subscription_data() -> list:
         gnrl_start = parse_to_date(item.get("rceptBgnde"))
         gnrl_end = parse_to_date(item.get("rceptEndde"))
 
-        if spsply_start and spsply_end and spsply_start <= today <= spsply_end: tags.append("특공접수")
-        if gnrl_start and gnrl_end and gnrl_start <= today <= gnrl_end: tags.append("일반접수")
-        if przwin_de and przwin_de == today: tags.append("당첨자발표")
-        if cntrct_start and cntrct_end and cntrct_start <= today <= cntrct_end: tags.append("계약일")
-        if tags: unique_results.add(f"[{'/'.join(tags)}] {name} ({area})")
+        # 기간 겹침 확인 (시작일이 윈도우 종료일 이전이고, 종료일이 윈도우 시작일 이후면 포함)
+        if spsply_start and spsply_end and spsply_start <= end_window and spsply_end >= start_window:
+            unique_results.add(f"[특공접수] {spsply_start.strftime('%m.%d')}~{spsply_end.strftime('%m.%d')} | {name} ({area})")
+        if gnrl_start and gnrl_end and gnrl_start <= end_window and gnrl_end >= start_window:
+            unique_results.add(f"[일반접수] {gnrl_start.strftime('%m.%d')}~{gnrl_end.strftime('%m.%d')} | {name} ({area})")
+        if przwin_de and start_window <= przwin_de <= end_window:
+            unique_results.add(f"[당첨발표] {przwin_de.strftime('%m.%d')} | {name} ({area})")
+        if cntrct_start and cntrct_end and cntrct_start <= end_window and cntrct_end >= start_window:
+            unique_results.add(f"[계약체결] {cntrct_start.strftime('%m.%d')}~{cntrct_end.strftime('%m.%d')} | {name} ({area})")
 
     for item in remndr_items:
         name = item.get("houseNm", "").strip()
         area = item.get("hssplyAdres", "").strip()
         if not any(k in area for k in ["서울", "경기", "인천"]): continue
 
-        tags = []
         przwin_de = parse_to_date(item.get("przwinPblancDe"))
         cntrct_start = parse_to_date(item.get("cntrctCnclsBgnde"))
         cntrct_end = parse_to_date(item.get("cntrctCnclsEndde"))
         sub_start = parse_to_date(item.get("subscrptRceptBgnde"))
         sub_end = parse_to_date(item.get("subscrptRceptEndde"))
 
-        if sub_start and sub_end and sub_start <= today <= sub_end: tags.append("무순위접수")
-        if przwin_de and przwin_de == today: tags.append("당첨자발표")
-        if cntrct_start and cntrct_end and cntrct_start <= today <= cntrct_end: tags.append("계약일")
-        if tags: unique_results.add(f"[{'/'.join(tags)}] {name} ({area})")
+        if sub_start and sub_end and sub_start <= end_window and sub_end >= start_window:
+            unique_results.add(f"[무순위접수] {sub_start.strftime('%m.%d')}~{sub_end.strftime('%m.%d')} | {name} ({area})")
+        if przwin_de and start_window <= przwin_de <= end_window:
+            unique_results.add(f"[당첨발표] {przwin_de.strftime('%m.%d')} | {name} ({area})")
+        if cntrct_start and cntrct_end and cntrct_start <= end_window and cntrct_end >= start_window:
+            unique_results.add(f"[계약체결] {cntrct_start.strftime('%m.%d')}~{cntrct_end.strftime('%m.%d')} | {name} ({area})")
 
     results = sorted(list(unique_results))
-    print(f"🎯 [매칭 완료] 오늘({today_str}) 기준 검증 타깃 단지 수: 총 {len(results)}건")
-    return results
+    print(f"🎯 [매칭 완료] 탐색 범위 내 검증 타깃 단지 수: 총 {len(results)}건")
+    return results, window_str
 
-def send_email(contents: list):
-    today_str = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
+def send_email(contents: list, window_str: str):
     no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "⚠️"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
 
     if no_data:
-        text = contents[0] if contents else "오늘 진행 중인 수도권 아파트 공급 일정이 없습니다."
+        text = contents[0] if contents else f"해당 기간({window_str}) 내 수도권 아파트 공급 일정이 없습니다."
         body_html = f"<p style='color:#666;font-size:14px;font-weight:bold;text-align:center;padding:25px 0;'>ℹ️ {text}</p>"
         cnt_str = "0건"
     else:
@@ -142,7 +145,7 @@ def send_email(contents: list):
         cnt_str = f"{len(contents)}건"
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🔔 [청약홈 동기화] 수도권 정밀 캘린더 ({cnt_str})"
+    msg["Subject"] = f"🔔 [청약홈 동기화] 수도권 주간 캘린더 브리핑 ({cnt_str})"
     msg["From"]    = SENDER_EMAIL
     msg["To"]      = RECEIVER_EMAIL
 
@@ -153,7 +156,7 @@ def send_email(contents: list):
       <div style="max-width:700px;margin:0 auto;border:1px solid #e9ecef;border-radius:8px;overflow:hidden;box-shadow:0 4px 10px rgba(0,0,0,0.05);">
         <div style="background-color:#1a73e8;padding:24px;text-align:center;color:#fff;">
           <h2 style="margin:0;font-size:22px;font-weight:bold;letter-spacing:-0.5px;">🔔 수도권 청약 상세 캘린더</h2>
-          <p style="margin:8px 0 0 0;font-size:14px;opacity:0.9;">기준일자: {today_str}</p>
+          <p style="margin:8px 0 0 0;font-size:14px;opacity:0.9;">조회기간: {window_str}</p>
         </div>
         <div style="padding:24px;background-color:#fff;">
           {body_html}
@@ -173,5 +176,5 @@ def send_email(contents: list):
         print(f"❌ 이메일 발송 실패: {e}")
 
 if __name__ == "__main__":
-    data = get_subscription_data()
-    send_email(data)
+    data, window_str = get_subscription_data()
+    send_email(data, window_str)
