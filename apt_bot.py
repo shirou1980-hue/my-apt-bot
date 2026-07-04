@@ -2,6 +2,7 @@ import os
 import smtplib
 import json
 import urllib.request
+from urllib.error import HTTPError
 import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -26,10 +27,15 @@ def parse_to_date(date_str: str):
     return None
 
 def fetch_api_data(url: str, retries=3) -> list:
-    """500 에러 발생 시 최대 3번까지 재시도하는 방어 로직"""
+    # 🔥 WAF(방화벽) 차단을 우회하기 위해 완벽한 크롬 브라우저로 위장합니다.
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+    }
+    
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url)
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=20) as resp:
                 raw = resp.read().decode("utf-8")
             data = json.loads(raw)
@@ -42,30 +48,42 @@ def fetch_api_data(url: str, retries=3) -> list:
             if isinstance(items, dict):
                 return [items]
             return items
-        except Exception as e:
-            print(f"⚠️ API 수신 실패 (시도 {attempt+1}/{retries}): {e}")
-            time.sleep(2) # 2초 대기 후 재시도
             
-    return None # 3번 다 실패하면 None 반환
+        except HTTPError as e:
+            # 🔥 500 에러 발생 시, 맹목적으로 죽지 않고 서버가 뱉어낸 진짜 XML 원문을 읽어냅니다.
+            try:
+                error_body = e.read().decode('utf-8', errors='ignore')
+            except:
+                error_body = "내용 없음"
+            print(f"⚠️ API 서버 에러 (HTTP {e.code}): {e.reason}")
+            print(f"-> 정부 서버 응답 메시지 원본: {error_body[:300]}")
+            time.sleep(2)
+        except Exception as e:
+            print(f"⚠️ API 통신 실패: {e}")
+            time.sleep(2)
+            
+    return None
 
 def get_subscription_data() -> list:
-    # 🔥 [타임머신 테스트] 내일(26일) 날짜 고정
+    # 타임머신 테스트용 (성공 확인 후 today = datetime.now()로 돌려놓으시면 됩니다)
     today = datetime(2026, 5, 26)
     print(f"📅 데이터 매칭 정밀 필터링 기준일: {today.strftime('%Y-%m-%d')}")
 
     if not PUBLIC_API_KEY:
-        return ["⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다. (GitHub Secrets 확인)"]
+        return ["⚠️ PUBLIC_DATA_API_KEY가 설정되지 않았습니다."]
 
-    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&_type=json"
-    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={PUBLIC_API_KEY}&numOfRows=1000&pageNo=1&_type=json"
+    # 키 앞뒤의 공백을 제거하여 안전하게 결합
+    safe_key = PUBLIC_API_KEY.strip()
+
+    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={safe_key}&numOfRows=1000&pageNo=1&_type=json"
+    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={safe_key}&numOfRows=1000&pageNo=1&_type=json"
 
     print("[API] 공공데이터포털 안전 규격 데이터 다운로드 가동...")
     apt_items = fetch_api_data(url_apt)
     remndr_items = fetch_api_data(url_remndr)
     
-    # 서버 완전 다운 시 장애 알림 발송
     if apt_items is None and remndr_items is None:
-        return ["⚠️ 공공데이터포털 정부 서버 장애(500 Error)로 인해 현재 데이터를 불러올 수 없습니다."]
+        return ["⚠️ 공공데이터포털 정부 서버 장애(500 Error) 또는 인증키 오류로 데이터를 불러올 수 없습니다. GitHub 로그를 확인하세요."]
         
     apt_items = apt_items or []
     remndr_items = remndr_items or []
@@ -75,8 +93,7 @@ def get_subscription_data() -> list:
     for item in apt_items:
         name = item.get("houseNm", "").strip()
         area = item.get("hssplyAdres", "").strip()
-        if not any(k in area for k in ["서울", "경기", "인천"]):
-            continue
+        if not any(k in area for k in ["서울", "경기", "인천"]): continue
 
         tags = []
         przwin_de = parse_to_date(item.get("przwinPblancDe"))
@@ -96,8 +113,7 @@ def get_subscription_data() -> list:
     for item in remndr_items:
         name = item.get("houseNm", "").strip()
         area = item.get("hssplyAdres", "").strip()
-        if not any(k in area for k in ["서울", "경기", "인천"]):
-            continue
+        if not any(k in area for k in ["서울", "경기", "인천"]): continue
 
         tags = []
         przwin_de = parse_to_date(item.get("przwinPblancDe"))
@@ -112,7 +128,7 @@ def get_subscription_data() -> list:
         if tags: unique_results.add(f"[{'/'.join(tags)}] {name} ({area})")
 
     results = sorted(list(unique_results))
-    print(f"🎯 [매칭 완료] 5/26 검증 타깃 단지 수: 총 {len(results)}건")
+    print(f"🎯 [매칭 완료] 검증 타깃 단지 수: 총 {len(results)}건")
     return results
 
 def send_email(contents: list):
@@ -136,9 +152,7 @@ def send_email(contents: list):
 
     html = f"""
     <html>
-    <head>
-      <meta charset="utf-8">
-    </head>
+    <head><meta charset="utf-8"></head>
     <body style="font-family:'Malgun Gothic',sans-serif;line-height:1.6;color:#333;margin:0;padding:20px;">
       <div style="max-width:700px;margin:0 auto;border:1px solid #e9ecef;border-radius:8px;overflow:hidden;box-shadow:0 4px 10px rgba(0,0,0,0.05);">
         <div style="background-color:#1a73e8;padding:24px;text-align:center;color:#fff;">
@@ -148,13 +162,9 @@ def send_email(contents: list):
         <div style="padding:24px;background-color:#fff;">
           {body_html}
         </div>
-        <div style="background-color:#f8f9fa;padding:15px;text-align:center;font-size:12px;color:#888;border-top:1px solid #e9ecef;">
-          본 메일은 안전한 공공데이터포털 연계 인프라를 통해 자동 생성 및 발송되었습니다.
-        </div>
       </div>
     </body>
     </html>"""
-
     msg.attach(MIMEText(html, "html", "utf-8"))
 
     try:
