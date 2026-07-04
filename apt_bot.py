@@ -2,6 +2,7 @@ import os
 import smtplib
 import json
 import urllib.request
+import urllib.parse
 from urllib.error import HTTPError
 import time
 from datetime import datetime, timedelta
@@ -27,9 +28,9 @@ def parse_to_date(date_str: str):
     return None
 
 def fetch_api_data(url: str, retries=3) -> list:
-    # 🔥 봇(Bot) 차단 방화벽을 뚫기 위한 크롬 위장 헤더
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
     }
     
     for attempt in range(retries):
@@ -39,20 +40,21 @@ def fetch_api_data(url: str, retries=3) -> list:
                 raw = resp.read().decode("utf-8")
             
             resp_json = json.loads(raw)
-            items_data = resp_json.get("response", {}).get("body", {}).get("items", {})
             
-            if not items_data or items_data == "" or isinstance(items_data, str):
-                return []
-                
-            items = items_data.get("item", [])
-            if isinstance(items, dict):
-                return [items]
-            return items
+            # odcloud 서버는 데이터를 'data' 리스트로 반환합니다.
+            if "data" in resp_json:
+                return resp_json["data"]
+            
+            # 만약의 경우를 대비한 구형 포맷 처리
+            items_data = resp_json.get("response", {}).get("body", {}).get("items", {})
+            if isinstance(items_data, dict):
+                items = items_data.get("item", [])
+                return [items] if isinstance(items, dict) else items
+            return []
             
         except HTTPError as e:
-            err_msg = ""
             try: err_msg = e.read().decode('utf-8', errors='ignore')
-            except: pass
+            except: err_msg = ""
             print(f"⚠️ API 통신 에러 (HTTP {e.code}): {err_msg[:200]}")
             time.sleep(2)
         except Exception as e:
@@ -62,7 +64,7 @@ def fetch_api_data(url: str, retries=3) -> list:
     return None
 
 def get_subscription_data() -> list:
-    # 🔥 [수정 완료] 강제 타임머신을 끄고, 한국 시간(KST) '오늘'을 자동으로 계산합니다.
+    # 🌟 완벽한 한국 시간(KST) '오늘' 날짜 세팅
     today = datetime.utcnow() + timedelta(hours=9)
     today = today.replace(hour=0, minute=0, second=0, microsecond=0)
     
@@ -73,17 +75,19 @@ def get_subscription_data() -> list:
         return ["⚠️ PUBLIC_DATA_API_KEY가 깃허브에 설정되지 않았습니다."]
 
     safe_key = PUBLIC_API_KEY.strip()
+    # 안전하게 URL 인코딩 적용
+    encoded_key = urllib.parse.quote(safe_key)
 
-    # 🔥 [수정 완료] 주소를 다시 청약홈 진짜 데이터가 있는 구형 메인 서버로 원복했습니다.
-    url_apt = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getAPTLttotPblancMstList?serviceKey={safe_key}&numOfRows=1000&pageNo=1&_type=json"
-    url_remndr = f"https://apis.data.go.kr/B551011/APTLttotPblancSvc/getRemndrMstList?serviceKey={safe_key}&numOfRows=1000&pageNo=1&_type=json"
+    # 🔥 404 에러 방지: Header 대신 URL 파라미터(?serviceKey=)로 인증키를 직접 찔러넣습니다.
+    url_apt = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getAPTLttotPblancMstList?page=1&perPage=1000&serviceKey={encoded_key}"
+    url_remndr = f"https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1/getRemndrMstList?page=1&perPage=1000&serviceKey={encoded_key}"
 
-    print("[API] 공공데이터포털 실시간 서버(apis.data.go.kr) 다운로드 가동...")
+    print("[API] 최신 클라우드 서버 직접 호출 가동...")
     apt_items = fetch_api_data(url_apt)
     remndr_items = fetch_api_data(url_remndr)
     
     if apt_items is None and remndr_items is None:
-        return ["⚠️ 공공데이터포털 정부 서버 장애 또는 인증 오류로 데이터를 불러올 수 없습니다."]
+        return ["⚠️ 공공데이터포털 서버 장애로 인해 데이터를 불러올 수 없습니다."]
         
     apt_items = apt_items or []
     remndr_items = remndr_items or []
@@ -131,7 +135,6 @@ def get_subscription_data() -> list:
     return results
 
 def send_email(contents: list):
-    # 메일 발송용 날짜도 오늘 날짜로 자동 동기화
     today_str = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
     no_data_keywords = ["없습니다", "없음", "오류", "실패", "누락", "⚠️"]
     no_data = not contents or any(k in contents[0] for k in no_data_keywords)
@@ -172,7 +175,7 @@ def send_email(contents: list):
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        print("📧 이메일 인코딩 발송 성공!")
+        print("📧 이메일 발송 성공!")
     except Exception as e:
         print(f"❌ 이메일 발송 실패: {e}")
 
