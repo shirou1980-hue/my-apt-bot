@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.header import Header
 
 SMTP_SERVER      = "smtp.gmail.com"
 SMTP_PORT        = 587
@@ -58,7 +59,6 @@ def fetch_all_pages(base_url: str, retries=3) -> list:
     return all_data
 
 def add_events_to_calendar(start_d, end_d, event_type, name, events_by_date, start_window, end_window):
-    """일정 기간(Start~End)을 달력의 각 날짜에 블록으로 채워넣는 함수"""
     if not start_d or not end_d: return
     curr = start_d
     while curr <= end_d:
@@ -66,7 +66,6 @@ def add_events_to_calendar(start_d, end_d, event_type, name, events_by_date, sta
             d_str = curr.strftime('%Y-%m-%d')
             if d_str not in events_by_date:
                 events_by_date[d_str] = []
-            # 중복 방지
             if not any(e['name'] == name and e['type'] == event_type for e in events_by_date[d_str]):
                 events_by_date[d_str].append({'type': event_type, 'name': name})
         curr += timedelta(days=1)
@@ -75,7 +74,6 @@ def get_subscription_data() -> tuple:
     today = datetime.utcnow() + timedelta(hours=9)
     today = today.replace(hour=0, minute=0, second=0, microsecond=0)
     
-    # 캘린더 표현을 위해 오늘 기준 이전 1주 ~ 이후 2주 (총 3주) 탐색
     start_window = today - timedelta(days=7)
     end_window = today + timedelta(days=14)
     window_str = f"{start_window.strftime('%Y-%m-%d')} ~ {end_window.strftime('%Y-%m-%d')}"
@@ -94,11 +92,9 @@ def get_subscription_data() -> tuple:
     
     events_by_date = {}
 
-    # 1. 일반 분양 (특공, 1·2순위)
     for item in apt_items:
         name = get_val(item, ["houseNm", "HOUSE_NM", "house_nm"])
         area = get_val(item, ["hssplyAdres", "HSSPLY_ADRES", "hssply_adres"])
-        # 🔥 서울, 경기 지역만 필터링 (인천 등 제외)
         if not any(k in area for k in ["서울", "경기"]): continue
 
         spsply_start = parse_to_date(get_val(item, ["spsplyRceptBgnde", "SPSPLY_RCEPT_BGNDE"]))
@@ -109,7 +105,6 @@ def get_subscription_data() -> tuple:
         add_events_to_calendar(spsply_start, spsply_end, '특별공급', name, events_by_date, start_window, end_window)
         add_events_to_calendar(gnrl_start, gnrl_end, '1·2순위', name, events_by_date, start_window, end_window)
 
-    # 2. 무순위 / 임의공급 / 취소후재공급
     for item in remndr_items:
         name = get_val(item, ["houseNm", "HOUSE_NM", "house_nm"])
         area = get_val(item, ["hssplyAdres", "HSSPLY_ADRES", "hssply_adres"])
@@ -118,7 +113,6 @@ def get_subscription_data() -> tuple:
         sub_start = parse_to_date(get_val(item, ["subscrptRceptBgnde", "SUBSCRPT_RCEPT_BGNDE"]))
         sub_end = parse_to_date(get_val(item, ["subscrptRceptEndde", "SUBSCRPT_RCEPT_ENDDE"]))
         
-        # 무순위/임의공급 여부는 API 특성상 명칭으로 추정하거나 일괄 무순위로 표기
         event_type = '무순위'
         if '취소분' in name or '재공급' in name: event_type = '취소후재공급'
         elif '임의' in name: event_type = '임의공급'
@@ -128,7 +122,6 @@ def get_subscription_data() -> tuple:
     return events_by_date, window_str, start_window, end_window
 
 def build_html_calendar(events_by_date, start_window, end_window):
-    # 달력 시작일(월요일)과 종료일(일요일) 맞추기
     cal_start = start_window - timedelta(days=start_window.weekday())
     cal_end = end_window + timedelta(days=(6 - end_window.weekday()))
 
@@ -143,13 +136,12 @@ def build_html_calendar(events_by_date, start_window, end_window):
     curr = cal_start
     while curr <= cal_end:
         if curr.weekday() == 0 and curr != cal_start:
-            html += "</tr><tr>" # 새로운 주(Week) 행 바꿈
+            html += "</tr><tr>" 
 
         date_str = curr.strftime('%Y-%m-%d')
         day_num = curr.day
         day_color = "red" if curr.weekday() == 6 else "blue" if curr.weekday() == 5 else "#495057"
         
-        # 오늘 날짜 하이라이트
         is_today = (curr == datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=9))
         bg_td = "#fffdf0" if is_today else "#ffffff"
 
@@ -160,16 +152,15 @@ def build_html_calendar(events_by_date, start_window, end_window):
             for event in events_by_date[date_str]:
                 bg_color, text_color, border = "#ffffff", "#333", "1px solid #dee2e6"
                 
-                # 청약홈 UI 카테고리별 색상 매핑
                 if event['type'] == '특별공급':
-                    bg_color, text_color, border = "#ff8c00", "#fff", "none" # 주황색
+                    bg_color, text_color, border = "#ff8c00", "#fff", "none" 
                 elif event['type'] == '1·2순위':
-                    bg_color, text_color, border = "#0d6efd", "#fff", "none" # 파란색
+                    bg_color, text_color, border = "#0d6efd", "#fff", "none" 
                 elif event['type'] in ['무순위', '임의공급', '취소후재공급']:
-                    bg_color, text_color, border = "#ffffff", "#495057", "1px solid #ced4da" # 테두리
+                    bg_color, text_color, border = "#ffffff", "#495057", "1px solid #ced4da" 
 
-                short_type = event['type'][:2] # 특공, 1·, 무순 등으로 축약
-                if event['type'] == '1·2순위': short_type = '1순위' # 시각적 간결함
+                short_type = event['type'][:2]
+                if event['type'] == '1·2순위': short_type = '1순위' 
                 
                 html += f"""
                 <div style='background-color: {bg_color}; color: {text_color}; border: {border}; border-radius: 3px; padding: 3px; font-size: 11px; margin-bottom: 4px; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all;' title='[{event['type']}] {event['name']}'>
@@ -191,7 +182,9 @@ def send_email(events_by_date: dict, window_str: str, start_window, end_window):
         cal_html = build_html_calendar(events_by_date, start_window, end_window)
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🔔 [청약홈] 서울/경기 주간 캘린더 브리핑"
+    
+    # 🔥 구형 인코딩을 버리고, UTF-8 국제 표준 포장지로 제목을 안전하게 감쌉니다.
+    msg["Subject"] = Header(f"🔔 [청약홈] 서울/경기 주간 캘린더 브리핑", "utf-8")
     msg["From"]    = SENDER_EMAIL
     msg["To"]      = RECEIVER_EMAIL
 
